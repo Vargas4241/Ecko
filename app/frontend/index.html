@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Ecko - Tu asistente virtual personal">
+    <title>Ecko - Asistente Virtual</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Ecko</h1>
+            <p class="subtitle">Tu asistente virtual personal</p>
+        </header>
+
+        <div class="chat-container">
+            <div id="chat-messages" class="chat-messages">
+                <div class="message assistant">
+                    <div class="message-content">
+                        <p>¡Hola! Soy Ecko, tu asistente virtual. ¿En qué puedo ayudarte hoy?</p>
+                        <p class="hint">💡 Escribe "ayuda" para ver los comandos disponibles.</p>
+                    </div>
+                    <div class="message-time"></div>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <form id="chat-form" class="chat-form">
+                    <input 
+                        type="text" 
+                        id="message-input" 
+                        class="message-input" 
+                        placeholder="Escribe tu mensaje aquí..."
+                        autocomplete="off"
+                        autofocus
+                    >
+                    <button type="submit" class="send-button" id="send-button">
+                        <span>Enviar</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <footer>
+            <p>Ecko v0.1.0 - Aprendiendo contigo</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
