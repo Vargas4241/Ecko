@@ -19,3 +19,8 @@ if env_path.exists():
 USE_AI = os.getenv("USE_AI", "false").lower() == "true"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+# Configuración de Búsqueda Web
+SEARCH_API_KEY = os.getenv("SEARCH_API_KEY", "")  # API key de Tavily (opcional)
+SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "duckduckgo")  # "tavily" o "duckduckgo"
+ENABLE_SEARCH = os.getenv("ENABLE_SEARCH", "true").lower() == "true"  # Habilitar búsqueda
+

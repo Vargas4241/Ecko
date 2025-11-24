@@ -5,10 +5,14 @@ Asistente virtual tipo "Jarvis" desarrollado con Python (FastAPI), diseñado par
 ## 📋 Características
 
 - **Chat conversacional inteligente**: Con soporte para IA real usando Groq API (gratuita)
+- **🔍 Búsqueda web inteligente**: Busca información en internet en tiempo real (nuevo!)
 - **Comandos básicos**: 
   - `hora` - Mostrar hora actual
   - `fecha` - Mostrar fecha actual
   - `recordar [texto]` - Guardar notas
+  - `buscar [tema]` - Buscar información en la web
+  - `qué es [concepto]` - Buscar definición o información
+  - `noticias [tema]` - Buscar noticias recientes
   - `ayuda` - Mostrar comandos disponibles
 - **Sesiones persistentes**: Mantiene el contexto de conversación
 - **Interfaz móvil**: Funciona perfectamente desde tu celular
@@ -173,6 +177,28 @@ GROQ_API_KEY=tu_api_key_aqui
 4. Reinicia el servidor
 
 **Ver guía completa en**: [docs/IA_SETUP.md](docs/IA_SETUP.md)
+
+## 🔍 Configuración de Búsqueda Web (Nuevo!)
+
+**✅ ¡La búsqueda web funciona por defecto!** No necesitas configurar nada.
+
+Ecko puede buscar información en internet automáticamente usando DuckDuckGo (gratis, sin API key).
+
+### Opcional: Mejor Calidad con Tavily
+
+Si quieres mejor calidad de búsqueda, puedes configurar Tavily (requiere API key gratuita):
+
+1. Obtén una API key gratuita en [Tavily.com](https://tavily.com)
+2. Crea `app/backend/.env` y añade:
+   ```env
+   ENABLE_SEARCH=true
+   SEARCH_PROVIDER=tavily
+   SEARCH_API_KEY=tu_api_key_tavily
+   ```
+
+**Pero esto es OPCIONAL** - DuckDuckGo ya funciona sin configuración.
+
+**Ver guía completa en**: [docs/BUSQUEDA_WEB.md](docs/BUSQUEDA_WEB.md)
 
 ## 📝 Notas
 

@@ -9,11 +9,19 @@ from typing import List, Dict, Optional
 
 # Importar configuración
 try:
-    from config import USE_AI, GROQ_API_KEY
+    from config import USE_AI, GROQ_API_KEY, ENABLE_SEARCH
 except ImportError:
     # Fallback si config.py no existe
     USE_AI = os.getenv("USE_AI", "false").lower() == "true"
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    ENABLE_SEARCH = os.getenv("ENABLE_SEARCH", "true").lower() == "true"
+
+# Importar servicio de búsqueda
+try:
+    from services.search_service import SearchService
+except ImportError:
+    SearchService = None
+    print("⚠️ [Búsqueda] SearchService no disponible")
 
 class ChatService:
     """
@@ -31,6 +39,17 @@ class ChatService:
         self.use_ai = USE_AI
         self.groq_api_key = GROQ_API_KEY
         self.ai_model = "llama-3.1-8b-instant"  # Modelo rápido y gratis de Groq
+        
+        # Configurar servicio de búsqueda
+        self.enable_search = ENABLE_SEARCH
+        self.search_service = None
+        if self.enable_search and SearchService:
+            try:
+                self.search_service = SearchService()
+                print("✅ Búsqueda web activada")
+            except Exception as e:
+                print(f"⚠️ [Búsqueda] Error inicializando: {e}")
+                self.search_service = None
         
         # Log de configuración (solo al iniciar)
         if self.use_ai and self.groq_api_key:
@@ -53,12 +72,24 @@ class ChatService:
         if message_lower.startswith("recordar"):
             return await self._handle_remember(user_message, session_id)
         
+        # Verificar comandos de búsqueda
+        search_commands = ["buscar", "busca", "qué es", "que es", "quien es", "quién es", "noticias"]
+        if self.search_service and any(message_lower.startswith(cmd) for cmd in search_commands):
+            return await self._handle_search(user_message, message_lower)
+        
         # Si la IA está habilitada y hay API key, usar IA PRIMERO
         # Solo usar respuestas básicas si la IA falla o está desactivada
         if self.use_ai and self.groq_api_key:
             try:
                 print(f"🤖 [IA] Procesando: '{user_message}' (historial: {len(history)} mensajes)")
-                ai_response = await self._generate_ai_response(user_message, history)
+                
+                # Verificar si necesita búsqueda (preguntas sobre temas actuales)
+                search_result = None
+                if self.search_service and self._should_search(message_lower):
+                    print(f"🔍 [Búsqueda] Detectada necesidad de búsqueda web")
+                    search_result = await self.search_service.search(user_message, max_results=3)
+                
+                ai_response = await self._generate_ai_response(user_message, history, search_result)
                 # Verificar que la respuesta de IA no esté vacía
                 if ai_response and ai_response.strip():
                     print(f"✅ [IA] Respuesta generada correctamente")
@@ -98,9 +129,12 @@ class ChatService:
 • hora - Mostrar la hora actual
 • fecha - Mostrar la fecha actual
 • recordar [texto] - Guardar una nota
+• buscar [tema] - Buscar información en la web
+• qué es [concepto] - Buscar definición o información
+• noticias [tema] - Buscar noticias recientes
 • ayuda - Mostrar esta ayuda
 
-También puedes conversar conmigo normalmente. Estoy aprendiendo contigo!
+También puedes conversar conmigo normalmente. Puedo buscar información en internet para responderte mejor!
         """
         return help_text.strip()
     
@@ -115,6 +149,86 @@ También puedes conversar conmigo normalmente. Estoy aprendiendo contigo!
             return f"✅ Nota guardada: '{note}'. Te recordaré esto más adelante."
         else:
             return "¿Qué te gustaría que recuerde? Usa: recordar [tu texto]"
+    
+    async def _handle_search(self, user_message: str, message_lower: str) -> str:
+        """Manejar comandos de búsqueda web"""
+        if not self.search_service:
+            return "Lo siento, el servicio de búsqueda no está disponible en este momento."
+        
+        # Extraer el término de búsqueda
+        query = user_message
+        
+        # Limpiar comandos comunes del inicio
+        search_prefixes = ["buscar", "busca", "qué es", "que es", "quien es", "quién es", "noticias"]
+        for prefix in search_prefixes:
+            if message_lower.startswith(prefix):
+                query = user_message[len(prefix):].strip()
+                break
+        
+        if not query or len(query) < 2:
+            return "¿Qué te gustaría buscar? Ejemplo: 'buscar Python' o 'qué es Docker'"
+        
+        try:
+            # Realizar búsqueda
+            search_result = await self.search_service.search(query, max_results=5)
+            
+            if search_result.get("error"):
+                return f"❌ Error en la búsqueda: {search_result['error']}"
+            
+            # Formatear respuesta
+            if search_result.get("answer"):
+                response = f"🔍 {search_result['answer']}\n\n"
+            else:
+                response = f"🔍 Encontré información sobre '{query}':\n\n"
+            
+            if search_result.get("results") and len(search_result["results"]) > 0:
+                response += "**Fuentes encontradas:**\n"
+                for i, result in enumerate(search_result["results"][:3], 1):
+                    response += f"{i}. **{result.get('title', 'Sin título')}**\n"
+                    if result.get("content"):
+                        content = result["content"][:150]
+                        response += f"   {content}...\n"
+                response += "\n¿Quieres más información sobre algún resultado específico?"
+            else:
+                response += "No encontré resultados específicos. ¿Puedes reformular tu búsqueda?"
+            
+            return response
+            
+        except Exception as e:
+            print(f"❌ [Búsqueda] Error: {e}")
+            return f"Lo siento, hubo un error al buscar. Por favor intenta de nuevo."
+    
+    def _should_search(self, message_lower: str) -> bool:
+        """
+        Determina si un mensaje requiere búsqueda web
+        Busca indicadores de preguntas sobre información actual o externa
+        """
+        # Indicadores de que necesita búsqueda
+        search_indicators = [
+            "últimas noticias", "noticias de", "qué pasó", "que pasó",
+            "cuándo fue", "cuando fue", "dónde está", "donde esta",
+            "información sobre", "datos de", "estadísticas de"
+        ]
+        
+        # Preguntas sobre temas técnicos o actuales
+        technical_terms = [
+            "python", "docker", "aws", "terraform", "javascript", "react",
+            "versión", "version", "actualización", "actualizacion"
+        ]
+        
+        # Si contiene indicadores de búsqueda
+        if any(indicator in message_lower for indicator in search_indicators):
+            return True
+        
+        # Si pregunta "qué es" o "quién es" algo
+        if re.search(r'qu[ée] es|qui[ée]n es', message_lower):
+            return True
+        
+        # Si menciona términos técnicos + pregunta
+        if any(term in message_lower for term in technical_terms) and any(q in message_lower for q in ["qué", "que", "cómo", "como"]):
+            return True
+        
+        return False
     
     async def _generate_response(self, user_message: str, history: List[Dict]) -> str:
         """
@@ -217,9 +331,10 @@ También puedes conversar conmigo normalmente. Estoy aprendiendo contigo!
         response_index = (len(history) + message_length) % len(responses_conversational)
         return responses_conversational[response_index]
     
-    async def _generate_ai_response(self, user_message: str, history: List[Dict]) -> str:
+    async def _generate_ai_response(self, user_message: str, history: List[Dict], search_result: Optional[Dict] = None) -> str:
         """
         Genera una respuesta usando Groq API (IA gratuita) - usando requests directamente
+        Puede incluir resultados de búsqueda web para información actualizada
         """
         try:
             import aiohttp
@@ -232,7 +347,19 @@ También puedes conversar conmigo normalmente. Estoy aprendiendo contigo!
 Responde en español de manera conversacional, natural y concisa. 
 Sé amigable pero profesional. Si no sabes algo, admítelo honestamente.
 Mantén las respuestas cortas y relevantes (máximo 2-3 frases).
-Cuando el usuario te diga su nombre, recuérdalo y úsalo en futuras conversaciones."""
+Cuando el usuario te diga su nombre, recuérdalo y úsalo en futuras conversaciones.
+Si se te proporciona información de búsqueda web, úsala para responder con datos actualizados y precisos."""
+            
+            # Si hay resultados de búsqueda, incluirlos en el contexto
+            user_message_with_context = user_message
+            if search_result and search_result.get("results"):
+                search_info = self.search_service.format_results_for_ai(search_result)
+                user_message_with_context = f"""Información de búsqueda web disponible:
+{search_info}
+
+Pregunta del usuario: {user_message}
+
+Usa la información de búsqueda para responder de manera precisa y actualizada."""
             
             # Preparar mensajes para la API (formato conversacional)
             messages = [{"role": "system", "content": system_prompt}]
@@ -245,8 +372,8 @@ Cuando el usuario te diga su nombre, recuérdalo y úsalo en futuras conversacio
                 if role in ["user", "assistant"]:
                     messages.append({"role": role, "content": content})
             
-            # Añadir el mensaje actual del usuario
-            messages.append({"role": "user", "content": user_message})
+            # Añadir el mensaje actual del usuario (con contexto de búsqueda si existe)
+            messages.append({"role": "user", "content": user_message_with_context})
             
             print(f"📤 [IA] Enviando request a Groq ({len(messages)} mensajes)...")
             
