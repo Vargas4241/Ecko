@@ -238,28 +238,71 @@ class EckoChat {
 
         const loadVoices = () => {
             const voices = window.speechSynthesis.getVoices();
+            console.log(`📋 Voces disponibles: ${voices.length}`);
+            
+            if (voices.length === 0) {
+                console.log('⏳ No hay voces disponibles aún, se cargarán después...');
+                return;
+            }
+
+            // Lista de voces preferidas en orden de prioridad (mejor calidad primero)
             const preferredVoices = [
-                voices.find(v => v.lang.includes('es-') && (
-                    v.name.includes('Latino') || v.name.includes('Latin') || 
+                // Primero: voces neurales/premium (mejor calidad)
+                voices.find(v => 
+                    v.lang.startsWith('es-') && 
+                    (v.name.toLowerCase().includes('neural') || 
+                     v.name.toLowerCase().includes('premium') ||
+                     v.name.toLowerCase().includes('enhanced'))
+                ),
+                // Segundo: voces masculinas latinoamericanas
+                voices.find(v => v.lang.startsWith('es-') && (
                     v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO' || 
                     v.lang === 'es-CL' || v.lang === 'es-PE'
                 ) && (
                     v.name.toLowerCase().includes('male') || 
-                    v.name.toLowerCase().includes('hombre')
+                    v.name.toLowerCase().includes('hombre') ||
+                    v.name.toLowerCase().includes('masculino')
                 )),
-                voices.find(v => (v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO')),
+                // Tercero: cualquier voz latinoamericana
+                voices.find(v => (v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO' || v.lang === 'es-CL' || v.lang === 'es-PE')),
+                // Cuarto: cualquier voz en español
                 voices.find(v => v.lang.startsWith('es-')),
             ].filter(Boolean);
 
             if (preferredVoices.length > 0) {
                 this.eckoVoice = preferredVoices[0];
-                console.log('✅ Voz seleccionada:', this.eckoVoice.name);
+                console.log('✅ Voz seleccionada:', this.eckoVoice.name, this.eckoVoice.lang);
+            } else {
+                console.log('⚠️ No se encontró voz en español, se usará la voz por defecto del navegador');
+                // Intentar obtener la primera voz disponible
+                if (voices.length > 0) {
+                    this.eckoVoice = voices[0];
+                    console.log('📝 Usando voz por defecto:', voices[0].name, voices[0].lang);
+                }
             }
         };
 
+        // Cargar voces inmediatamente
         loadVoices();
+        
+        // También escuchar cuando las voces se carguen (importante para algunos navegadores)
         if (window.speechSynthesis.onvoiceschanged !== undefined) {
-            window.speechSynthesis.onvoiceschanged = loadVoices;
+            window.speechSynthesis.onvoiceschanged = () => {
+                console.log('🔄 Voces cambiadas/cargadas, recargando...');
+                loadVoices();
+            };
+        }
+
+        // En algunos navegadores, las voces solo se cargan después de una interacción del usuario
+        // Pre-cargar las voces con un utterance silencioso si es posible
+        try {
+            const testUtterance = new SpeechSynthesisUtterance('');
+            testUtterance.volume = 0;
+            window.speechSynthesis.speak(testUtterance);
+            window.speechSynthesis.cancel();
+            console.log('✅ Pre-carga de voces iniciada');
+        } catch (e) {
+            console.log('ℹ️ Pre-carga de voces no disponible:', e.message);
         }
     }
 
@@ -391,7 +434,9 @@ class EckoChat {
             this.removeTypingIndicator(typingId);
             this.addMessage('assistant', response.response);
             
-            // Hablar la respuesta ya que vino de voz
+            // Hablar la respuesta inmediatamente (ya que vino de voz)
+            // En móviles, TTS debe ejecutarse lo más rápido posible después de la interacción
+            console.log('🎤 Mensaje de voz enviado, hablando respuesta inmediatamente...');
             this.speakResponse(response.response);
             
             if (response.session_id) {
@@ -549,31 +594,194 @@ class EckoChat {
     }
 
     speakResponse(text) {
-        if (!('speechSynthesis' in window)) return;
+        console.log('🔊 Intentando hablar respuesta:', text.substring(0, 50) + '...');
+        
+        if (!('speechSynthesis' in window)) {
+            console.warn('⚠️ Speech Synthesis no está disponible en este navegador');
+            return;
+        }
 
+        // Cancelar cualquier síntesis anterior
         window.speechSynthesis.cancel();
 
-        const cleanText = text
-            .replace(/[^\w\s.,;:!?¿¡áéíóúñÁÉÍÓÚÑ\-'"]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .replace(/\n/g, '. ')
+        // Limpiar y mejorar el texto para mejor pronunciación
+        let cleanText = text
+            .replace(/[^\w\s.,;:!?¿¡áéíóúñÁÉÍÓÚÑ\-'"]/g, ' ') // Remover caracteres especiales
+            .replace(/\s+/g, ' ') // Espacios múltiples a uno solo
+            .replace(/\n/g, '. ') // Nueva línea a punto
+            .replace(/\.{2,}/g, '.') // Múltiples puntos a uno solo
             .trim();
 
-        if (!cleanText) return;
-
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        
-        if (this.eckoVoice) {
-            utterance.voice = this.eckoVoice;
-        } else {
-            utterance.lang = 'es-ES';
+        if (!cleanText) {
+            console.warn('⚠️ Texto vacío después de limpiar');
+            return;
         }
-        
-        utterance.rate = 0.95;
-        utterance.pitch = 0.85;
-        utterance.volume = 1.0;
 
-        window.speechSynthesis.speak(utterance);
+        // Dividir texto largo en frases más pequeñas para evitar trabas
+        const maxLength = 200; // Máximo de caracteres por frase
+        
+        const splitIntoPhrases = (text) => {
+            // Dividir por puntuación primero
+            const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+            const phrases = [];
+            
+            for (const sentence of sentences) {
+                if (sentence.length <= maxLength) {
+                    phrases.push(sentence.trim());
+                } else {
+                    // Si la frase es muy larga, dividir por comas
+                    const parts = sentence.split(/[,;]/);
+                    let currentPhrase = '';
+                    
+                    for (const part of parts) {
+                        const trimmed = part.trim();
+                        if (currentPhrase.length + trimmed.length + 2 <= maxLength) {
+                            currentPhrase += (currentPhrase ? ', ' : '') + trimmed;
+                        } else {
+                            if (currentPhrase) phrases.push(currentPhrase);
+                            currentPhrase = trimmed;
+                        }
+                    }
+                    if (currentPhrase) phrases.push(currentPhrase);
+                }
+            }
+            
+            return phrases.filter(p => p.length > 0);
+        };
+
+        const phrases = splitIntoPhrases(cleanText);
+        console.log(`🔊 Texto dividido en ${phrases.length} frase(s):`, phrases.map(p => p.substring(0, 50) + '...'));
+
+        // Función para seleccionar la mejor voz
+        const selectBestVoice = (voices) => {
+            // Prioridad 1: Voces neurales/premium (suelen tener "Neural" o "Premium" en el nombre)
+            let voice = voices.find(v => 
+                v.lang.startsWith('es-') && 
+                (v.name.toLowerCase().includes('neural') || 
+                 v.name.toLowerCase().includes('premium') ||
+                 v.name.toLowerCase().includes('enhanced'))
+            );
+            
+            if (voice) {
+                console.log('🎯 Voz premium/neural encontrada:', voice.name);
+                return voice;
+            }
+            
+            // Prioridad 2: Voces masculinas latinoamericanas
+            voice = voices.find(v => 
+                v.lang.startsWith('es-') && 
+                (v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO' || 
+                 v.lang === 'es-CL' || v.lang === 'es-PE') &&
+                (v.name.toLowerCase().includes('male') || 
+                 v.name.toLowerCase().includes('hombre') ||
+                 v.name.toLowerCase().includes('masculino'))
+            );
+            
+            if (voice) {
+                console.log('🎯 Voz masculina latinoamericana encontrada:', voice.name);
+                return voice;
+            }
+            
+            // Prioridad 3: Cualquier voz latinoamericana
+            voice = voices.find(v => 
+                v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO' || 
+                v.lang === 'es-CL' || v.lang === 'es-PE'
+            );
+            
+            if (voice) {
+                console.log('🎯 Voz latinoamericana encontrada:', voice.name);
+                return voice;
+            }
+            
+            // Prioridad 4: Cualquier voz en español
+            voice = voices.find(v => v.lang.startsWith('es-'));
+            
+            if (voice) {
+                console.log('🎯 Voz en español encontrada:', voice.name);
+                return voice;
+            }
+            
+            return voices[0] || null;
+        };
+
+        // Función para hablar con mejor configuración
+        const speakPhrases = (phraseIndex = 0) => {
+            if (phraseIndex >= phrases.length) {
+                console.log('✅ Todas las frases habladas');
+                return;
+            }
+
+            const phrase = phrases[phraseIndex];
+            const utterance = new SpeechSynthesisUtterance(phrase);
+            
+            // Seleccionar la mejor voz disponible
+            const voices = window.speechSynthesis.getVoices();
+            const selectedVoice = this.eckoVoice || selectBestVoice(voices);
+            
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+                console.log(`🔊 Frase ${phraseIndex + 1}/${phrases.length} - Voz:`, selectedVoice.name);
+            } else {
+                utterance.lang = 'es-ES';
+                console.log('⚠️ Usando idioma por defecto (es-ES)');
+            }
+            
+            // Parámetros optimizados para sonido más natural
+            utterance.rate = 1.0;  // Velocidad normal (antes 0.95, más lento = más robótico)
+            utterance.pitch = 1.0; // Tono normal (antes 0.85, más bajo = más robótico)
+            utterance.volume = 1.0;
+            
+            // Pausa natural entre frases
+            if (phraseIndex > 0) {
+                utterance.volume = 1.0;
+            }
+
+            // Manejar eventos
+            utterance.onstart = () => {
+                console.log(`✅ Iniciando frase ${phraseIndex + 1}/${phrases.length}`);
+            };
+
+            utterance.onerror = (event) => {
+                console.error(`❌ Error en frase ${phraseIndex + 1}:`, event.error);
+                // Continuar con la siguiente frase aunque haya error
+                speakPhrases(phraseIndex + 1);
+            };
+
+            utterance.onend = () => {
+                console.log(`✅ Frase ${phraseIndex + 1}/${phrases.length} completada`);
+                // Pequeña pausa entre frases (el navegador la maneja automáticamente)
+                setTimeout(() => {
+                    speakPhrases(phraseIndex + 1);
+                }, 150); // 150ms de pausa entre frases
+            };
+
+            try {
+                window.speechSynthesis.speak(utterance);
+            } catch (error) {
+                console.error('❌ Error al ejecutar speak():', error);
+            }
+        };
+
+        // Asegurar que las voces estén cargadas
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length === 0) {
+            console.log('⏳ Esperando a que las voces se carguen...');
+            window.speechSynthesis.onvoiceschanged = () => {
+                console.log('✅ Voces cargadas, hablando ahora...');
+                window.speechSynthesis.onvoiceschanged = null;
+                speakPhrases();
+            };
+            // Timeout de seguridad
+            setTimeout(() => {
+                if (window.speechSynthesis.onvoiceschanged) {
+                    console.log('⚠️ Timeout esperando voces, intentando hablar de todas formas...');
+                    window.speechSynthesis.onvoiceschanged = null;
+                    speakPhrases();
+                }
+            }, 1000);
+        } else {
+            speakPhrases();
+        }
     }
 
     scrollToBottom() {
