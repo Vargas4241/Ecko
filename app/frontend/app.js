@@ -22,6 +22,8 @@ class EckoChat {
         this.supportedSpeech = false;
         this.voiceFromAudio = false;
         this.eckoVoice = null;
+        this.pendingVoiceMessage = null;
+        this.voiceMessageSent = false;
         
         console.log('🔧 Constructor EckoChat ejecutado');
         this.init();
@@ -143,24 +145,46 @@ class EckoChat {
         };
 
         this.recognition.onresult = async (event) => {
-            const transcript = event.results[0][0].transcript.trim();
-            console.log('✅ Texto reconocido:', transcript);
+            // Obtener el texto completo de todos los resultados
+            let finalTranscript = '';
+            let interimTranscript = '';
+            
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript;
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+            
+            const transcript = finalTranscript.trim() || interimTranscript.trim();
+            console.log('✅ Texto reconocido:', transcript, 'Final:', !!finalTranscript);
             
             if (!transcript) {
                 this.showVoiceStatus('No se detectó habla. Intenta de nuevo.', 'error');
                 return;
             }
             
+            // Guardar el mensaje pendiente
+            this.pendingVoiceMessage = transcript;
+            this.voiceMessageSent = false;
             this.voiceFromAudio = true;
+            
             if (this.messageInput) {
                 this.messageInput.value = transcript;
             }
             
-            this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
-            
-            setTimeout(() => {
-                this.sendMessageFromVoice(transcript);
-            }, 500);
+            // Si es un resultado final, marcar para enviar
+            if (finalTranscript) {
+                this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                // Pequeño delay para asegurar que onend se ejecute primero si es necesario
+                setTimeout(() => {
+                    this.sendPendingVoiceMessage();
+                }, 300);
+            } else {
+                this.showVoiceStatus('🎤 Escuchando...', 'info');
+            }
         };
 
         this.recognition.onerror = (event) => {
@@ -187,10 +211,20 @@ class EckoChat {
         };
 
         this.recognition.onend = () => {
-            console.log('🛑 Reconocimiento finalizado');
+            console.log('🛑 Reconocimiento finalizado', {
+                pendingMessage: this.pendingVoiceMessage,
+                messageSent: this.voiceMessageSent
+            });
             this.isListening = false;
             this.updateVoiceButton(false);
-            if (!this.voiceFromAudio) {
+            
+            // Si hay un mensaje pendiente que no se ha enviado, enviarlo ahora
+            if (this.pendingVoiceMessage && !this.voiceMessageSent) {
+                console.log('📤 Enviando mensaje pendiente desde onend');
+                setTimeout(() => {
+                    this.sendPendingVoiceMessage();
+                }, 100);
+            } else if (!this.voiceFromAudio && !this.pendingVoiceMessage) {
                 setTimeout(() => this.hideVoiceStatus(), 1000);
             }
         };
@@ -248,10 +282,18 @@ class EckoChat {
 
         if (this.isListening) {
             console.log('🛑 Deteniendo reconocimiento...');
+            // Si hay un mensaje pendiente, enviarlo antes de detener
+            if (this.pendingVoiceMessage && !this.voiceMessageSent) {
+                console.log('📤 Enviando mensaje antes de detener');
+                this.sendPendingVoiceMessage();
+            }
             this.recognition.stop();
         } else {
             try {
+                // Resetear estado de voz
                 this.voiceFromAudio = false;
+                this.pendingVoiceMessage = null;
+                this.voiceMessageSent = false;
                 console.log('▶️ Iniciando reconocimiento...');
                 this.recognition.start();
             } catch (error) {
@@ -306,12 +348,34 @@ class EckoChat {
         }
     }
 
+    sendPendingVoiceMessage() {
+        if (!this.pendingVoiceMessage || this.voiceMessageSent) {
+            console.log('⚠️ No hay mensaje pendiente o ya fue enviado');
+            return;
+        }
+        
+        const message = this.pendingVoiceMessage;
+        this.voiceMessageSent = true;
+        this.pendingVoiceMessage = null;
+        
+        console.log('📤 Enviando mensaje de voz:', message);
+        this.sendMessageFromVoice(message);
+    }
+
     async sendMessageFromVoice(message) {
         const messageText = message.trim();
-        if (!messageText) return;
+        if (!messageText) {
+            this.voiceMessageSent = false;
+            return;
+        }
 
+        // Asegurar que el reconocimiento esté detenido
         if (this.isListening && this.recognition) {
-            this.recognition.stop();
+            try {
+                this.recognition.stop();
+            } catch (e) {
+                // Ya estaba detenido, no importa
+            }
         }
 
         this.setInputDisabled(true);
@@ -319,21 +383,27 @@ class EckoChat {
         if (this.messageInput) {
             this.messageInput.value = '';
         }
-        this.hideVoiceStatus();
+        this.showVoiceStatus('📤 Enviando mensaje...', 'info');
 
         try {
             const typingId = this.showTypingIndicator();
             const response = await this.sendMessage(messageText);
             this.removeTypingIndicator(typingId);
             this.addMessage('assistant', response.response);
+            
+            // Hablar la respuesta ya que vino de voz
             this.speakResponse(response.response);
             
             if (response.session_id) {
                 this.sessionId = response.session_id;
             }
+            
+            this.hideVoiceStatus();
         } catch (error) {
             console.error('Error:', error);
             this.addMessage('assistant', '❌ Lo siento, hubo un error. Por favor intenta de nuevo.');
+            this.showVoiceStatus('❌ Error al enviar mensaje', 'error');
+            setTimeout(() => this.hideVoiceStatus(), 3000);
         } finally {
             this.setInputDisabled(false);
             this.voiceFromAudio = false;
