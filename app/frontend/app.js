@@ -1,41 +1,350 @@
 /**
  * Ecko - Frontend JavaScript
  * Maneja la interfaz de chat y comunicación con la API
+ * Incluye reconocimiento de voz y modo oscuro/claro
  */
 
+// Definir la clase PRIMERO
 class EckoChat {
     constructor() {
-        this.apiUrl = window.location.origin; // Usar la misma URL del servidor
+        this.apiUrl = window.location.origin;
         this.sessionId = null;
         this.messageInput = document.getElementById('message-input');
         this.chatForm = document.getElementById('chat-form');
         this.chatMessages = document.getElementById('chat-messages');
         this.sendButton = document.getElementById('send-button');
+        this.voiceButton = document.getElementById('voice-button');
+        this.voiceStatus = document.getElementById('voice-status');
         
+        // Speech Recognition y Synthesis
+        this.recognition = null;
+        this.isListening = false;
+        this.supportedSpeech = false;
+        this.voiceFromAudio = false;
+        this.eckoVoice = null;
+        
+        console.log('🔧 Constructor EckoChat ejecutado');
         this.init();
     }
 
     init() {
-        // Event listeners
-        this.chatForm.addEventListener('submit', (e) => this.handleSubmit(e));
+        console.log('🔧 Inicializando componentes...');
+        
+        // Inicializar tema
+        this.initTheme();
+        
+        // Inicializar reconocimiento de voz
+        this.initSpeechRecognition();
+        
+        // Cargar voces disponibles para TTS
+        this.initTextToSpeech();
+        
+        // Configurar form
+        if (this.chatForm) {
+            this.chatForm.addEventListener('submit', (e) => this.handleSubmit(e));
+            console.log('✅ Form submit listener agregado');
+        } else {
+            console.error('❌ chatForm no encontrado');
+        }
+        
+        // Configurar botones
+        this.setupButtons();
         
         // Crear sesión inicial
         this.createSession();
         
-        // Focus en input al cargar
-        this.messageInput.focus();
+        // Focus en input
+        if (this.messageInput) {
+            this.messageInput.focus();
+        }
+    }
+
+    setupButtons() {
+        console.log('🔘 Configurando botones...');
         
-        // Auto-resize input (opcional para futuro)
-        // this.messageInput.addEventListener('input', () => this.adjustInputHeight());
+        // Botón de tema - Configuración directa
+        const themeBtn = document.getElementById('theme-toggle');
+        console.log('🔍 Botón de tema encontrado:', !!themeBtn);
+        if (themeBtn) {
+            // Limpiar cualquier listener previo
+            themeBtn.replaceWith(themeBtn.cloneNode(true));
+            const newThemeBtn = document.getElementById('theme-toggle');
+            
+            newThemeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🎨 Click en botón de tema detectado');
+                this.toggleTheme();
+            });
+            console.log('✅ Botón de tema configurado');
+        } else {
+            console.error('❌ Botón de tema no encontrado');
+        }
+        
+        // Botón de voz - Configuración directa
+        const voiceBtn = document.getElementById('voice-button');
+        console.log('🔍 Botón de voz encontrado:', !!voiceBtn);
+        if (voiceBtn) {
+            // Limpiar cualquier listener previo
+            voiceBtn.replaceWith(voiceBtn.cloneNode(true));
+            const newVoiceBtn = document.getElementById('voice-button');
+            
+            newVoiceBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🎤 Click en botón de voz detectado');
+                this.toggleVoiceRecognition(e);
+            });
+            
+            this.voiceButton = newVoiceBtn;
+            console.log('✅ Botón de voz configurado');
+        } else {
+            console.error('❌ Botón de voz no encontrado');
+        }
+    }
+
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('ecko-theme', newTheme);
+        console.log('🎨 Tema cambiado a:', newTheme);
+    }
+
+    initTheme() {
+        const savedTheme = localStorage.getItem('ecko-theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        console.log('🎨 Tema inicial aplicado:', savedTheme);
+    }
+
+    initSpeechRecognition() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        if (!SpeechRecognition) {
+            console.warn('⚠️ Speech Recognition no disponible');
+            if (this.voiceButton) {
+                this.voiceButton.style.display = 'none';
+            }
+            return;
+        }
+
+        this.supportedSpeech = true;
+        this.recognition = new SpeechRecognition();
+        this.recognition.lang = 'es-ES';
+        this.recognition.continuous = false;
+        this.recognition.interimResults = false;
+        this.recognition.maxAlternatives = 1;
+
+        this.recognition.onstart = () => {
+            console.log('🎤 Reconocimiento iniciado');
+            this.isListening = true;
+            this.updateVoiceButton(true);
+            this.showVoiceStatus('🎤 Escuchando...');
+        };
+
+        this.recognition.onresult = async (event) => {
+            const transcript = event.results[0][0].transcript.trim();
+            console.log('✅ Texto reconocido:', transcript);
+            
+            if (!transcript) {
+                this.showVoiceStatus('No se detectó habla. Intenta de nuevo.', 'error');
+                return;
+            }
+            
+            this.voiceFromAudio = true;
+            if (this.messageInput) {
+                this.messageInput.value = transcript;
+            }
+            
+            this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+            
+            setTimeout(() => {
+                this.sendMessageFromVoice(transcript);
+            }, 500);
+        };
+
+        this.recognition.onerror = (event) => {
+            console.error('❌ Error:', event.error);
+            this.isListening = false;
+            this.updateVoiceButton(false);
+            this.hideVoiceStatus();
+            
+            let errorMsg = 'Error al reconocer voz. ';
+            switch(event.error) {
+                case 'no-speech':
+                    errorMsg = 'No se detectó habla. Intenta de nuevo.';
+                    break;
+                case 'audio-capture':
+                    errorMsg = 'No se pudo acceder al micrófono. Verifica los permisos.';
+                    break;
+                case 'not-allowed':
+                    errorMsg = 'Permiso de micrófono denegado.';
+                    break;
+            }
+            
+            this.showVoiceStatus(errorMsg, 'error');
+            setTimeout(() => this.hideVoiceStatus(), 4000);
+        };
+
+        this.recognition.onend = () => {
+            console.log('🛑 Reconocimiento finalizado');
+            this.isListening = false;
+            this.updateVoiceButton(false);
+            if (!this.voiceFromAudio) {
+                setTimeout(() => this.hideVoiceStatus(), 1000);
+            }
+        };
+    }
+
+    initTextToSpeech() {
+        if (!('speechSynthesis' in window)) {
+            console.warn('⚠️ Text-to-Speech no disponible');
+            return;
+        }
+
+        const loadVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+            const preferredVoices = [
+                voices.find(v => v.lang.includes('es-') && (
+                    v.name.includes('Latino') || v.name.includes('Latin') || 
+                    v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO' || 
+                    v.lang === 'es-CL' || v.lang === 'es-PE'
+                ) && (
+                    v.name.toLowerCase().includes('male') || 
+                    v.name.toLowerCase().includes('hombre')
+                )),
+                voices.find(v => (v.lang === 'es-MX' || v.lang === 'es-AR' || v.lang === 'es-CO')),
+                voices.find(v => v.lang.startsWith('es-')),
+            ].filter(Boolean);
+
+            if (preferredVoices.length > 0) {
+                this.eckoVoice = preferredVoices[0];
+                console.log('✅ Voz seleccionada:', this.eckoVoice.name);
+            }
+        };
+
+        loadVoices();
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+    }
+
+    toggleVoiceRecognition(e) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        console.log('🎤 toggleVoiceRecognition llamado', {
+            supportedSpeech: this.supportedSpeech,
+            recognition: !!this.recognition,
+            isListening: this.isListening
+        });
+
+        if (!this.supportedSpeech || !this.recognition) {
+            alert('Tu navegador no soporta reconocimiento de voz. Usa Chrome, Edge o Safari.');
+            return;
+        }
+
+        if (this.isListening) {
+            console.log('🛑 Deteniendo reconocimiento...');
+            this.recognition.stop();
+        } else {
+            try {
+                this.voiceFromAudio = false;
+                console.log('▶️ Iniciando reconocimiento...');
+                this.recognition.start();
+            } catch (error) {
+                console.error('❌ Error:', error);
+                if (!error.message || !error.message.includes('already started')) {
+                    alert('Error al iniciar el reconocimiento. Intenta de nuevo.');
+                }
+            }
+        }
+    }
+
+    updateVoiceButton(listening) {
+        if (!this.voiceButton) {
+            this.voiceButton = document.getElementById('voice-button');
+        }
+        
+        if (!this.voiceButton) return;
+        
+        if (listening) {
+            this.voiceButton.classList.add('listening');
+            this.voiceButton.style.background = '#ef4444';
+            this.voiceButton.style.borderColor = '#ef4444';
+            this.voiceButton.style.color = 'white';
+            this.voiceButton.title = 'Detener grabación';
+        } else {
+            this.voiceButton.classList.remove('listening');
+            this.voiceButton.style.background = '';
+            this.voiceButton.style.borderColor = '';
+            this.voiceButton.style.color = '';
+            this.voiceButton.title = 'Hablar con Ecko';
+        }
+    }
+
+    showVoiceStatus(text, type = 'info') {
+        if (!this.voiceStatus) {
+            this.voiceStatus = document.getElementById('voice-status');
+        }
+        if (!this.voiceStatus) return;
+        
+        const statusText = this.voiceStatus.querySelector('.voice-status-text');
+        if (statusText) statusText.textContent = text;
+        this.voiceStatus.className = `voice-status ${type}`;
+        this.voiceStatus.style.display = 'block';
+    }
+
+    hideVoiceStatus() {
+        if (!this.voiceStatus) {
+            this.voiceStatus = document.getElementById('voice-status');
+        }
+        if (this.voiceStatus) {
+            this.voiceStatus.style.display = 'none';
+        }
+    }
+
+    async sendMessageFromVoice(message) {
+        const messageText = message.trim();
+        if (!messageText) return;
+
+        if (this.isListening && this.recognition) {
+            this.recognition.stop();
+        }
+
+        this.setInputDisabled(true);
+        this.addMessage('user', messageText);
+        if (this.messageInput) {
+            this.messageInput.value = '';
+        }
+        this.hideVoiceStatus();
+
+        try {
+            const typingId = this.showTypingIndicator();
+            const response = await this.sendMessage(messageText);
+            this.removeTypingIndicator(typingId);
+            this.addMessage('assistant', response.response);
+            this.speakResponse(response.response);
+            
+            if (response.session_id) {
+                this.sessionId = response.session_id;
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            this.addMessage('assistant', '❌ Lo siento, hubo un error. Por favor intenta de nuevo.');
+        } finally {
+            this.setInputDisabled(false);
+            this.voiceFromAudio = false;
+        }
     }
 
     async createSession() {
         try {
             const response = await fetch(`${this.apiUrl}/api/sessions`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
+                headers: { 'Content-Type': 'application/json' }
             });
             const data = await response.json();
             this.sessionId = data.session_id;
@@ -48,50 +357,51 @@ class EckoChat {
     async handleSubmit(e) {
         e.preventDefault();
         
-        const message = this.messageInput.value.trim();
+        const message = this.messageInput ? this.messageInput.value.trim() : '';
         if (!message) return;
 
-        // Deshabilitar input mientras se procesa
+        if (this.isListening && this.recognition) {
+            this.recognition.stop();
+        }
+
+        const wasFromVoice = this.voiceFromAudio;
+        this.voiceFromAudio = false;
+
         this.setInputDisabled(true);
-        
-        // Mostrar mensaje del usuario
         this.addMessage('user', message);
-        
-        // Limpiar input
-        this.messageInput.value = '';
+        if (this.messageInput) {
+            this.messageInput.value = '';
+        }
+        this.hideVoiceStatus();
 
         try {
-            // Mostrar indicador de escritura
             const typingId = this.showTypingIndicator();
-            
-            // Enviar mensaje a la API
             const response = await this.sendMessage(message);
-            
-            // Remover indicador de escritura
             this.removeTypingIndicator(typingId);
-            
-            // Mostrar respuesta
             this.addMessage('assistant', response.response);
             
-            // Actualizar session ID si es necesario
+            if (wasFromVoice) {
+                this.speakResponse(response.response);
+            }
+            
             if (response.session_id) {
                 this.sessionId = response.session_id;
             }
         } catch (error) {
-            console.error('Error enviando mensaje:', error);
+            console.error('Error:', error);
             this.addMessage('assistant', '❌ Lo siento, hubo un error. Por favor intenta de nuevo.');
         } finally {
             this.setInputDisabled(false);
-            this.messageInput.focus();
+            if (this.messageInput) {
+                this.messageInput.focus();
+            }
         }
     }
 
     async sendMessage(message) {
         const response = await fetch(`${this.apiUrl}/api/chat`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: message,
                 session_id: this.sessionId
@@ -122,18 +432,14 @@ class EckoChat {
             <div class="message-time">${time}</div>
         `;
 
-        this.chatMessages.appendChild(messageDiv);
-        this.scrollToBottom();
+        if (this.chatMessages) {
+            this.chatMessages.appendChild(messageDiv);
+            this.scrollToBottom();
+        }
     }
 
     formatMessage(content) {
-        // Convertir saltos de línea en <br>
-        let formatted = content.replace(/\n/g, '<br>');
-        
-        // Convertir emojis y códigos simples en HTML
-        // Por ahora solo preservamos el HTML básico
-        
-        return formatted;
+        return content.replace(/\n/g, '<br>');
     }
 
     showTypingIndicator() {
@@ -151,8 +457,10 @@ class EckoChat {
             </div>
         `;
 
-        this.chatMessages.appendChild(typingDiv);
-        this.scrollToBottom();
+        if (this.chatMessages) {
+            this.chatMessages.appendChild(typingDiv);
+            this.scrollToBottom();
+        }
         
         return 'typing-indicator';
     }
@@ -165,22 +473,53 @@ class EckoChat {
     }
 
     setInputDisabled(disabled) {
-        this.messageInput.disabled = disabled;
-        this.sendButton.disabled = disabled;
+        if (this.messageInput) this.messageInput.disabled = disabled;
+        if (this.sendButton) this.sendButton.disabled = disabled;
+        if (this.voiceButton) this.voiceButton.disabled = disabled;
+    }
+
+    speakResponse(text) {
+        if (!('speechSynthesis' in window)) return;
+
+        window.speechSynthesis.cancel();
+
+        const cleanText = text
+            .replace(/[^\w\s.,;:!?¿¡áéíóúñÁÉÍÓÚÑ\-'"]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/\n/g, '. ')
+            .trim();
+
+        if (!cleanText) return;
+
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        
+        if (this.eckoVoice) {
+            utterance.voice = this.eckoVoice;
+        } else {
+            utterance.lang = 'es-ES';
+        }
+        
+        utterance.rate = 0.95;
+        utterance.pitch = 0.85;
+        utterance.volume = 1.0;
+
+        window.speechSynthesis.speak(utterance);
     }
 
     scrollToBottom() {
-        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-    }
-
-    // Método para ajustar altura del input (futuro)
-    adjustInputHeight() {
-        // Implementación futura para input multilínea
+        if (this.chatMessages) {
+            this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+        }
     }
 }
 
 // Inicializar cuando el DOM esté listo
 document.addEventListener('DOMContentLoaded', () => {
-    new EckoChat();
+    console.log('🚀 Inicializando Ecko Chat...');
+    try {
+        window.eckoChat = new EckoChat();
+        console.log('✅ EckoChat instanciado correctamente:', window.eckoChat);
+    } catch (error) {
+        console.error('❌ Error al crear EckoChat:', error);
+    }
 });
-

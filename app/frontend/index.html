@@ -10,10 +10,15 @@
 <body>
     <div class="container">
         <header>
-            <div class="logo-container">
+            <div class="header-content">
                 <img src="/static/logo.svg" alt="Ecko Logo" class="logo">
+                <h1>Ecko</h1>
+                <button class="theme-toggle" id="theme-toggle" title="Cambiar tema">
+                    <svg class="theme-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 18C8.69 18 6 15.31 6 12C6 8.69 8.69 6 12 6C15.31 6 18 8.69 18 12C18 15.31 15.31 18 12 18ZM12 4C7.58 4 4 7.58 4 12C4 16.42 7.58 20 12 20C16.42 20 20 16.42 20 12C20 7.58 16.42 4 12 4ZM12 19V5C15.87 5 19 8.13 19 12C19 15.87 15.87 19 12 19Z" fill="currentColor"/>
+                    </svg>
+                </button>
             </div>
-            <h1>Ecko</h1>
         </header>
 
         <div class="chat-container">
@@ -21,7 +26,7 @@
                 <div class="message assistant">
                     <div class="message-content">
                         <p>¡Hola! Soy Ecko, tu asistente virtual. ¿En qué puedo ayudarte hoy?</p>
-                        <p class="hint">💡 Escribe "ayuda" para ver los comandos disponibles.</p>
+                        <p class="hint">💡 Puedes escribir o usar el botón de micrófono para hablar conmigo.</p>
                     </div>
                     <div class="message-time"></div>
                 </div>
@@ -37,10 +42,20 @@
                         autocomplete="off"
                         autofocus
                     >
-                    <button type="submit" class="send-button" id="send-button">
+                    <button type="submit" class="send-button" id="send-button" title="Enviar mensaje">
                         <span>Enviar</span>
                     </button>
+                    <button type="button" class="voice-button" id="voice-button" title="Hablar con Ecko">
+                        <svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z" fill="currentColor"/>
+                            <path d="M19 10V12C19 15.87 15.87 19 12 19C8.13 19 5 15.87 5 12V10H7V12C7 14.76 9.24 17 12 17C14.76 17 17 14.76 17 12V10H19Z" fill="currentColor"/>
+                            <path d="M11 22H13V19H11V22Z" fill="currentColor"/>
+                        </svg>
+                    </button>
                 </form>
+                <div id="voice-status" class="voice-status" style="display: none;">
+                    <span class="voice-status-text">🎤 Escuchando...</span>
+                </div>
             </div>
         </div>
 
@@ -52,4 +67,3 @@
     <script src="/static/app.js"></script>
 </body>
 </html>
-
