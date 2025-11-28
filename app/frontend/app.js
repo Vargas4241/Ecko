@@ -15,6 +15,11 @@ class EckoChat {
         this.sendButton = document.getElementById('send-button');
         this.voiceButton = document.getElementById('voice-button');
         this.voiceStatus = document.getElementById('voice-status');
+        this.notificationsContainer = document.getElementById('notifications-container');
+        
+        // Sistema de notificaciones
+        this.notificationInterval = null;
+        this.lastReminderCheck = null;
         
         // Speech Recognition y Synthesis
         this.recognition = null;
@@ -53,7 +58,15 @@ class EckoChat {
         this.setupButtons();
         
         // Crear sesión inicial
-        this.createSession();
+        this.createSession().then(() => {
+            // Iniciar polling de recordatorios después de crear sesión
+            this.startReminderPolling();
+            // Registrar para push notifications
+            this.initPushNotifications();
+        });
+        
+        // Registrar Service Worker para PWA y Push
+        this.registerServiceWorker();
         
         // Focus en input
         if (this.messageInput) {
@@ -133,9 +146,14 @@ class EckoChat {
         this.supportedSpeech = true;
         this.recognition = new SpeechRecognition();
         this.recognition.lang = 'es-ES';
-        this.recognition.continuous = false;
-        this.recognition.interimResults = false;
+        this.recognition.continuous = true;  // Continuar escuchando
+        this.recognition.interimResults = true;  // Mostrar resultados provisionales
         this.recognition.maxAlternatives = 1;
+        
+        // Variables para controlar el timeout de silencio
+        this.silenceTimeout = null;
+        this.lastTranscriptTime = null;
+        this.silenceDuration = 2000;  // 2 segundos de silencio antes de enviar
 
         this.recognition.onstart = () => {
             console.log('🎤 Reconocimiento iniciado');
@@ -152,38 +170,75 @@ class EckoChat {
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const transcript = event.results[i][0].transcript;
                 if (event.results[i].isFinal) {
-                    finalTranscript += transcript;
+                    finalTranscript += transcript + ' ';
                 } else {
                     interimTranscript += transcript;
                 }
             }
             
-            const transcript = finalTranscript.trim() || interimTranscript.trim();
-            console.log('✅ Texto reconocido:', transcript, 'Final:', !!finalTranscript);
+            // Actualizar el tiempo de último transcript
+            this.lastTranscriptTime = Date.now();
             
-            if (!transcript) {
+            // Combinar todos los resultados finales hasta ahora
+            const allFinal = finalTranscript.trim();
+            const currentTranscript = allFinal || interimTranscript.trim();
+            
+            console.log('✅ Texto reconocido:', currentTranscript, 'Final:', !!allFinal, 'Interim:', interimTranscript);
+            
+            if (!currentTranscript) {
                 this.showVoiceStatus('No se detectó habla. Intenta de nuevo.', 'error');
                 return;
             }
             
-            // Guardar el mensaje pendiente
-            this.pendingVoiceMessage = transcript;
+            // Guardar el mensaje pendiente (actualizar con lo más reciente)
+            if (allFinal) {
+                this.pendingVoiceMessage = allFinal;
+            } else {
+                this.pendingVoiceMessage = currentTranscript;
+            }
             this.voiceMessageSent = false;
             this.voiceFromAudio = true;
             
             if (this.messageInput) {
-                this.messageInput.value = transcript;
+                this.messageInput.value = currentTranscript;
             }
             
-            // Si es un resultado final, marcar para enviar
-            if (finalTranscript) {
-                this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
-                // Pequeño delay para asegurar que onend se ejecute primero si es necesario
-                setTimeout(() => {
-                    this.sendPendingVoiceMessage();
-                }, 300);
+            // Si hay resultados finales, esperar silencio antes de enviar
+            if (allFinal) {
+                this.showVoiceStatus('🎤 Escuchando... (esperando más o finaliza con silencio)', 'info');
+                
+                // Cancelar timeout anterior
+                if (this.silenceTimeout) {
+                    clearTimeout(this.silenceTimeout);
+                }
+                
+                // Configurar nuevo timeout para esperar silencio
+                this.silenceTimeout = setTimeout(() => {
+                    if (this.pendingVoiceMessage && !this.voiceMessageSent) {
+                        console.log('⏱️ Silencio detectado, enviando mensaje...');
+                        this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                        this.sendPendingVoiceMessage();
+                    }
+                }, this.silenceDuration);
             } else {
+                // Resultados provisionales - mostrar que está escuchando
                 this.showVoiceStatus('🎤 Escuchando...', 'info');
+                
+                // Resetear timeout si hay actividad
+                if (this.silenceTimeout) {
+                    clearTimeout(this.silenceTimeout);
+                }
+                
+                // Si hay un mensaje pendiente de antes, esperar silencio
+                if (this.pendingVoiceMessage) {
+                    this.silenceTimeout = setTimeout(() => {
+                        if (this.pendingVoiceMessage && !this.voiceMessageSent) {
+                            console.log('⏱️ Silencio después de interim, enviando...');
+                            this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                            this.sendPendingVoiceMessage();
+                        }
+                    }, this.silenceDuration);
+                }
             }
         };
 
@@ -215,15 +270,26 @@ class EckoChat {
                 pendingMessage: this.pendingVoiceMessage,
                 messageSent: this.voiceMessageSent
             });
+            
+            // Limpiar timeout de silencio
+            if (this.silenceTimeout) {
+                clearTimeout(this.silenceTimeout);
+                this.silenceTimeout = null;
+            }
+            
             this.isListening = false;
             this.updateVoiceButton(false);
             
-            // Si hay un mensaje pendiente que no se ha enviado, enviarlo ahora
+            // Si hay un mensaje pendiente que no se ha enviado, esperar un poco más y enviarlo
             if (this.pendingVoiceMessage && !this.voiceMessageSent) {
-                console.log('📤 Enviando mensaje pendiente desde onend');
+                console.log('📤 Enviando mensaje pendiente desde onend después de timeout');
+                // Esperar un poco más para asegurar que capturamos todo
                 setTimeout(() => {
-                    this.sendPendingVoiceMessage();
-                }, 100);
+                    if (this.pendingVoiceMessage && !this.voiceMessageSent) {
+                        this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                        this.sendPendingVoiceMessage();
+                    }
+                }, 500);
             } else if (!this.voiceFromAudio && !this.pendingVoiceMessage) {
                 setTimeout(() => this.hideVoiceStatus(), 1000);
             }
@@ -325,9 +391,16 @@ class EckoChat {
 
         if (this.isListening) {
             console.log('🛑 Deteniendo reconocimiento...');
+            
+            // Limpiar timeout de silencio
+            if (this.silenceTimeout) {
+                clearTimeout(this.silenceTimeout);
+                this.silenceTimeout = null;
+            }
+            
             // Si hay un mensaje pendiente, enviarlo antes de detener
             if (this.pendingVoiceMessage && !this.voiceMessageSent) {
-                console.log('📤 Enviando mensaje antes de detener');
+                console.log('📤 Enviando mensaje antes de detener manualmente');
                 this.sendPendingVoiceMessage();
             }
             this.recognition.stop();
@@ -337,6 +410,11 @@ class EckoChat {
                 this.voiceFromAudio = false;
                 this.pendingVoiceMessage = null;
                 this.voiceMessageSent = false;
+                this.lastTranscriptTime = null;
+                if (this.silenceTimeout) {
+                    clearTimeout(this.silenceTimeout);
+                    this.silenceTimeout = null;
+                }
                 console.log('▶️ Iniciando reconocimiento...');
                 this.recognition.start();
             } catch (error) {
@@ -456,6 +534,34 @@ class EckoChat {
     }
 
     async createSession() {
+        // Intentar cargar sessionId guardado del localStorage
+        const savedSessionId = localStorage.getItem('ecko_session_id');
+        if (savedSessionId) {
+            console.log('📋 Sesión cargada desde localStorage:', savedSessionId);
+            // Verificar que la sesión sigue siendo válida
+            try {
+                const response = await fetch(`${this.apiUrl}/api/sessions/${savedSessionId}/exists`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.exists) {
+                        this.sessionId = savedSessionId;
+                        console.log('✅ Sesión válida restaurada');
+                        return savedSessionId;
+                    } else {
+                        console.log('⚠️ Sesión guardada no existe, creando nueva...');
+                        localStorage.removeItem('ecko_session_id');
+                    }
+                } else {
+                    console.log('⚠️ Error verificando sesión, creando nueva...');
+                    localStorage.removeItem('ecko_session_id');
+                }
+            } catch (error) {
+                console.log('⚠️ Error verificando sesión, creando nueva...', error);
+                localStorage.removeItem('ecko_session_id');
+            }
+        }
+        
+        // Crear nueva sesión
         try {
             const response = await fetch(`${this.apiUrl}/api/sessions`, {
                 method: 'POST',
@@ -463,9 +569,13 @@ class EckoChat {
             });
             const data = await response.json();
             this.sessionId = data.session_id;
-            console.log('Sesión creada:', this.sessionId);
+            // Guardar en localStorage para persistir entre sesiones
+            localStorage.setItem('ecko_session_id', this.sessionId);
+            console.log('✅ Nueva sesión creada y guardada:', this.sessionId);
+            return this.sessionId;
         } catch (error) {
-            console.error('Error creando sesión:', error);
+            console.error('❌ Error creando sesión:', error);
+            return null;
         }
     }
 
@@ -610,6 +720,7 @@ class EckoChat {
             .replace(/\s+/g, ' ') // Espacios múltiples a uno solo
             .replace(/\n/g, '. ') // Nueva línea a punto
             .replace(/\.{2,}/g, '.') // Múltiples puntos a uno solo
+            .replace(/[✅❌⚠️🔔⏰📋💡🤖🔍]/g, '') // Remover emojis que pueden causar problemas
             .trim();
 
         if (!cleanText) {
@@ -618,7 +729,8 @@ class EckoChat {
         }
 
         // Dividir texto largo en frases más pequeñas para evitar trabas
-        const maxLength = 200; // Máximo de caracteres por frase
+        // Reducir tamaño máximo para evitar que se trabe
+        const maxLength = 150; // Máximo de caracteres por frase (reducido de 200 para evitar trabas)
         
         const splitIntoPhrases = (text) => {
             // Dividir por puntuación primero
@@ -726,14 +838,18 @@ class EckoChat {
                 console.log('⚠️ Usando idioma por defecto (es-ES)');
             }
             
-            // Parámetros optimizados para sonido más natural
-            utterance.rate = 1.0;  // Velocidad normal (antes 0.95, más lento = más robótico)
-            utterance.pitch = 1.0; // Tono normal (antes 0.85, más bajo = más robótico)
+            // Parámetros optimizados para sonido más natural y fluido
+            // Rate: 1.1 hace que suene más natural (la velocidad humana es ligeramente más rápida)
+            utterance.rate = 1.1;  // Ligeramente más rápido para sonar más natural
+            utterance.pitch = 1.05; // Tono ligeramente más alto para menos robótico
             utterance.volume = 1.0;
             
-            // Pausa natural entre frases
-            if (phraseIndex > 0) {
-                utterance.volume = 1.0;
+            // Asegurar que se use la mejor voz disponible en cada frase
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+                utterance.lang = selectedVoice.lang;
+            } else {
+                utterance.lang = 'es-ES';
             }
 
             // Manejar eventos
@@ -743,16 +859,18 @@ class EckoChat {
 
             utterance.onerror = (event) => {
                 console.error(`❌ Error en frase ${phraseIndex + 1}:`, event.error);
-                // Continuar con la siguiente frase aunque haya error
-                speakPhrases(phraseIndex + 1);
+                // Continuar con la siguiente frase aunque haya error (evita trabas)
+                setTimeout(() => {
+                    speakPhrases(phraseIndex + 1);
+                }, 200);
             };
 
             utterance.onend = () => {
                 console.log(`✅ Frase ${phraseIndex + 1}/${phrases.length} completada`);
-                // Pequeña pausa entre frases (el navegador la maneja automáticamente)
+                // Pausa más larga entre frases para sonar más natural (como pausa de respiración)
                 setTimeout(() => {
                     speakPhrases(phraseIndex + 1);
-                }, 150); // 150ms de pausa entre frases
+                }, 300); // 300ms de pausa entre frases para sonido más natural
             };
 
             try {
@@ -787,6 +905,295 @@ class EckoChat {
     scrollToBottom() {
         if (this.chatMessages) {
             this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+        }
+    }
+
+    // ========== SISTEMA DE NOTIFICACIONES Y RECORDATORIOS ==========
+    
+    startReminderPolling() {
+        // Verificar recordatorios cada 5 segundos para notificaciones más rápidas
+        if (this.notificationInterval) {
+            clearInterval(this.notificationInterval);
+        }
+        
+        this.notificationInterval = setInterval(() => {
+            this.checkReminders();
+        }, 5000); // 5 segundos - para recibir notificaciones rápidamente
+        
+        // Verificar inmediatamente
+        this.checkReminders();
+        
+        console.log('✅ Polling de recordatorios iniciado (cada 5 segundos)');
+    }
+
+    stopReminderPolling() {
+        if (this.notificationInterval) {
+            clearInterval(this.notificationInterval);
+            this.notificationInterval = null;
+            console.log('🛑 Polling de recordatorios detenido');
+        }
+    }
+
+    async checkReminders() {
+        if (!this.sessionId) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${this.apiUrl}/api/reminders/${this.sessionId}`);
+            if (!response.ok) {
+                // Si el servicio no está disponible, no mostrar error
+                if (response.status === 503) {
+                    return;
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const reminders = data.reminders || [];
+            const notifications = data.notifications || [];
+
+            // Mostrar notificaciones pendientes
+            if (notifications.length > 0) {
+                console.log('🔔 Notificaciones recibidas:', notifications);
+                notifications.forEach(notification => {
+                    // Mostrar notificación en la UI
+                    this.showNotification(notification.message, 'info', 10000);
+                    
+                    // También agregar al chat como mensaje del asistente
+                    this.addMessage('assistant', notification.message);
+                    
+                    // Hablar la notificación
+                    this.speakResponse(notification.message);
+                });
+            }
+            
+        } catch (error) {
+            // Silenciosamente ignorar errores de polling
+            // No queremos spammear la consola
+            console.debug('Error en polling de recordatorios:', error);
+        }
+    }
+
+    showNotification(message, type = 'info', duration = 5000) {
+        if (!this.notificationsContainer) {
+            console.warn('⚠️ Contenedor de notificaciones no encontrado');
+            return;
+        }
+
+        const notification = document.createElement('div');
+        notification.className = `notification notification-${type}`;
+        
+        const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
+        
+        notification.innerHTML = `
+            <div class="notification-content">
+                <span class="notification-icon">${icon}</span>
+                <span class="notification-message">${this.formatMessage(message)}</span>
+                <button class="notification-close" onclick="this.parentElement.parentElement.remove()">×</button>
+            </div>
+        `;
+
+        this.notificationsContainer.appendChild(notification);
+
+        // Animar entrada
+        setTimeout(() => {
+            notification.classList.add('notification-show');
+        }, 10);
+
+        // Auto-remover después de duration
+        setTimeout(() => {
+            notification.classList.remove('notification-show');
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 300); // Tiempo de animación de salida
+        }, duration);
+
+        // Hablar la notificación si es importante
+        if (type === 'success' || type === 'warning') {
+            this.speakResponse(message);
+        }
+    }
+
+    async getReminders() {
+        if (!this.sessionId) {
+            return [];
+        }
+
+        try {
+            const response = await fetch(`${this.apiUrl}/api/reminders/${this.sessionId}`);
+            if (!response.ok) {
+                return [];
+            }
+            const data = await response.json();
+            return data.reminders || [];
+        } catch (error) {
+            console.error('Error obteniendo recordatorios:', error);
+            return [];
+        }
+    }
+
+    async deleteReminder(reminderId) {
+        if (!this.sessionId) {
+            return false;
+        }
+
+        try {
+            const response = await fetch(`${this.apiUrl}/api/reminders/${this.sessionId}/${reminderId}`, {
+                method: 'DELETE'
+            });
+            return response.ok;
+        } catch (error) {
+            console.error('Error eliminando recordatorio:', error);
+            return false;
+        }
+    }
+
+    // ========== PUSH NOTIFICATIONS Y PWA ==========
+    
+    async registerServiceWorker() {
+        if ('serviceWorker' in navigator) {
+            try {
+                const registration = await navigator.serviceWorker.register('/static/sw.js');
+                console.log('✅ Service Worker registrado:', registration.scope);
+                
+                // Verificar actualizaciones
+                registration.addEventListener('updatefound', () => {
+                    const newWorker = registration.installing;
+                    newWorker.addEventListener('statechange', () => {
+                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            console.log('🔄 Nueva versión de Ecko disponible');
+                        }
+                    });
+                });
+            } catch (error) {
+                console.error('❌ Error registrando Service Worker:', error);
+            }
+        } else {
+            console.warn('⚠️ Service Workers no soportados en este navegador');
+        }
+    }
+    
+    async initPushNotifications() {
+        if (!('Notification' in window)) {
+            console.warn('⚠️ Notificaciones no soportadas en este navegador');
+            return;
+        }
+        
+        if (!('serviceWorker' in navigator)) {
+            console.warn('⚠️ Service Worker no disponible');
+            return;
+        }
+        
+        // Verificar si ya tenemos permiso
+        if (Notification.permission === 'granted') {
+            console.log('✅ Permiso de notificaciones ya concedido');
+            await this.subscribeToPush();
+        } else if (Notification.permission === 'default') {
+            console.log('⏳ Permiso de notificaciones pendiente - El usuario puede activarlo después');
+        } else {
+            console.log('❌ Permiso de notificaciones denegado');
+        }
+    }
+    
+    async requestNotificationPermission() {
+        if (!('Notification' in window)) {
+            return false;
+        }
+        
+        if (Notification.permission === 'granted') {
+            return true;
+        }
+        
+        if (Notification.permission === 'default') {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+                console.log('✅ Permiso de notificaciones concedido');
+                await this.subscribeToPush();
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    async subscribeToPush() {
+        try {
+            const registration = await navigator.serviceWorker.ready;
+            
+            // Obtener clave pública VAPID del servidor
+            const vapidResponse = await fetch(`${this.apiUrl}/api/push/vapid-public-key`);
+            const { publicKey } = await vapidResponse.json();
+            
+            if (!publicKey) {
+                console.warn('⚠️ No se obtuvo clave pública VAPID');
+                return;
+            }
+            
+            // Convertir clave pública a formato Uint8Array
+            const applicationServerKey = this.urlBase64ToUint8Array(publicKey);
+            
+            // Suscribirse a push notifications
+            const subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: applicationServerKey
+            });
+            
+            console.log('✅ Suscrito a push notifications');
+            
+            // Enviar suscripción al backend
+            await this.sendSubscriptionToServer(subscription);
+            
+            return subscription;
+        } catch (error) {
+            console.error('❌ Error suscribiéndose a push:', error);
+            return null;
+        }
+    }
+    
+    urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding)
+            .replace(/\-/g, '+')
+            .replace(/_/g, '/');
+        
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        
+        for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+    }
+    
+    async sendSubscriptionToServer(subscription) {
+        if (!this.sessionId) {
+            console.warn('⚠️ No hay sessionId para guardar suscripción');
+            return;
+        }
+        
+        try {
+            const response = await fetch(`${this.apiUrl}/api/push/subscribe`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    session_id: this.sessionId,
+                    subscription: subscription
+                })
+            });
+            
+            if (response.ok) {
+                console.log('✅ Suscripción guardada en el servidor');
+                this.showNotification('🔔 Notificaciones push activadas', 'success');
+            } else {
+                console.error('❌ Error guardando suscripción:', await response.text());
+            }
+        } catch (error) {
+            console.error('❌ Error enviando suscripción:', error);
         }
     }
 }

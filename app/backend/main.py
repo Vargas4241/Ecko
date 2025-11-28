@@ -15,6 +15,29 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from routes import chat_router
+from routes import push_router
+
+# Importar servicios
+try:
+    from services.reminder_service import ReminderService
+    REMINDER_SERVICE_AVAILABLE = True
+except ImportError:
+    REMINDER_SERVICE_AVAILABLE = False
+    print("[WARN] ReminderService no disponible (dependencias faltantes)")
+
+try:
+    from services.user_profile_service import UserProfileService
+    USER_PROFILE_SERVICE_AVAILABLE = True
+except ImportError:
+    USER_PROFILE_SERVICE_AVAILABLE = False
+    print("[WARN] UserProfileService no disponible")
+
+try:
+    from services.push_service import PushService
+    PUSH_SERVICE_AVAILABLE = True
+except ImportError:
+    PUSH_SERVICE_AVAILABLE = False
+    print("[WARN] PushService no disponible")
 
 # Crear aplicación FastAPI
 app = FastAPI(
@@ -22,6 +45,74 @@ app = FastAPI(
     description="Asistente virtual tipo Jarvis - Backend API",
     version="0.1.0"
 )
+
+# Instancias globales de servicios
+reminder_service = None
+user_profile_service = None
+push_service = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Inicializar servicios al iniciar la aplicación"""
+    global reminder_service, user_profile_service, push_service
+    
+    # Inicializar servicio de push notifications
+    if PUSH_SERVICE_AVAILABLE:
+        try:
+            push_service = PushService()
+            push_router.push_service = push_service
+            # Guardar referencia global para acceso desde otros servicios
+            import services.push_service as push_module
+            push_module._push_service_instance = push_service
+            print("[OK] PushService inicializado")
+        except Exception as e:
+            print(f"[WARN] Error inicializando PushService: {e}")
+            import traceback
+            traceback.print_exc()
+            push_service = None
+    
+    # Inicializar servicio de perfil de usuario (Jarvis-like)
+    if USER_PROFILE_SERVICE_AVAILABLE:
+        try:
+            user_profile_service = UserProfileService()
+        except Exception as e:
+            print(f"[WARN] Error inicializando UserProfileService: {e}")
+            user_profile_service = None
+    
+    # Inicializar servicio de recordatorios
+    if REMINDER_SERVICE_AVAILABLE:
+        try:
+            reminder_service = ReminderService()
+            # Pasar el servicio de recordatorios al router
+            chat_router.reminder_service = reminder_service
+            # Actualizar chat_service con ambos servicios
+            from services.chat_service import ChatService
+            chat_router.chat_service = ChatService(
+                reminder_service=reminder_service,
+                user_profile_service=user_profile_service
+            )
+            print("[OK] Servicios inicializados correctamente")
+        except Exception as e:
+            print(f"[WARN] Error inicializando servicios: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continuar sin recordatorios si hay error
+            from services.chat_service import ChatService
+            chat_router.chat_service = ChatService(user_profile_service=user_profile_service)
+    else:
+        # Inicializar solo ChatService con perfil de usuario
+        from services.chat_service import ChatService
+        chat_router.chat_service = ChatService(user_profile_service=user_profile_service)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Limpiar recursos al cerrar la aplicación"""
+    global reminder_service
+    if reminder_service:
+        try:
+            reminder_service.shutdown()
+        except:
+            pass
 
 # Configurar CORS para permitir requests desde el frontend
 app.add_middleware(
@@ -34,11 +125,24 @@ app.add_middleware(
 
 # Incluir routers
 app.include_router(chat_router.router, prefix="/api", tags=["chat"])
+app.include_router(push_router.router, prefix="/api/push", tags=["push"])
 
 # Servir archivos estáticos del frontend (para desarrollo)
 frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend")
 if os.path.exists(frontend_path):
     app.mount("/static", StaticFiles(directory=frontend_path), name="static")
+    
+    # Servir Service Worker con el tipo MIME correcto (importante para PWA)
+    @app.get("/static/sw.js")
+    async def service_worker():
+        """Servir Service Worker con tipo MIME correcto"""
+        sw_path = os.path.join(frontend_path, "sw.js")
+        if os.path.exists(sw_path):
+            from fastapi.responses import Response
+            with open(sw_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return Response(content=content, media_type="application/javascript")
+        raise HTTPException(status_code=404, detail="Service Worker no encontrado")
 
 @app.get("/")
 async def root():

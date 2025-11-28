@@ -17,23 +17,32 @@ if __name__ == "__main__":
         import uvicorn
         from main import app
         
+        import sys
+        import io
+        # Configurar encoding UTF-8 para Windows
+        if sys.platform == 'win32':
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        
         print("=" * 50)
-        print("🤖 Iniciando Ecko - Asistente Virtual")
+        print("Iniciando Ecko - Asistente Virtual")
         print("=" * 50)
-        print("\n📡 Servidor iniciándose en http://localhost:8000")
-        print("📖 Documentación API: http://localhost:8000/docs")
-        print("🌐 Interfaz web: http://localhost:8000")
-        print("\n💡 Presiona Ctrl+C para detener el servidor\n")
+        print("\nServidor iniciandose en http://localhost:8000")
+        print("Documentacion API: http://localhost:8000/docs")
+        print("Interfaz web: http://localhost:8000")
+        print("\nPresiona Ctrl+C para detener el servidor\n")
         
         uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
     except ImportError as e:
-        print("❌ Error: No se encontraron las dependencias necesarias.")
-        print("\n📦 Por favor instala las dependencias:")
+        print("ERROR: No se encontraron las dependencias necesarias.")
+        print("\nPor favor instala las dependencias:")
         print("   cd app/backend")
         print("   pip install -r requirements.txt")
         print(f"\nDetalle del error: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"❌ Error al iniciar el servidor: {e}")
+        print(f"ERROR al iniciar el servidor: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
