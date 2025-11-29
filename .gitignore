@@ -47,3 +47,11 @@ htmlcov/
 # Docker
 .dockerignore
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Chat logs (generados automáticamente)
+app/backend/data/chats/*.txt
+

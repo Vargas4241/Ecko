@@ -9,12 +9,16 @@ from typing import List, Dict, Optional
 
 # Importar configuración
 try:
-    from config import USE_AI, GROQ_API_KEY, ENABLE_SEARCH
+    from config import USE_AI, GROQ_API_KEY, ENABLE_SEARCH, AI_PROVIDER, ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
 except ImportError:
     # Fallback si config.py no existe
     USE_AI = os.getenv("USE_AI", "false").lower() == "true"
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     ENABLE_SEARCH = os.getenv("ENABLE_SEARCH", "true").lower() == "true"
+    AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").lower()
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Importar servicio de búsqueda
 try:
@@ -37,13 +41,20 @@ except ImportError:
     UserProfileService = None
     print("[WARN] [Perfil] UserProfileService no disponible")
 
+# Importar servicio de notas
+try:
+    from services.notes_service import NotesService
+except ImportError:
+    NotesService = None
+    print("[WARN] [Notas] NotesService no disponible")
+
 class ChatService:
     """
     Servicio principal para procesar mensajes y generar respuestas
     Ahora soporta IA usando Groq API (gratuita)
     """
     
-    def __init__(self, reminder_service=None, user_profile_service=None):
+    def __init__(self, reminder_service=None, user_profile_service=None, notes_service=None, onboarding_service=None):
         self.commands = {
             "hora": self._get_time,
             "fecha": self._get_date,
@@ -51,10 +62,14 @@ class ChatService:
             "recordatorios": self._list_reminders,
             "mis recordatorios": self._list_reminders,
         }
-        # Configurar API de IA (Groq - gratis)
+        # Configurar API de IA (soporta Groq, Anthropic Claude, OpenAI, Google Gemini)
         self.use_ai = USE_AI
         self.groq_api_key = GROQ_API_KEY
-        self.ai_model = "llama-3.1-8b-instant"  # Modelo rápido y gratis de Groq
+        self.anthropic_api_key = ANTHROPIC_API_KEY
+        self.openai_api_key = OPENAI_API_KEY
+        self.gemini_api_key = GEMINI_API_KEY
+        self.ai_provider = AI_PROVIDER  # "groq", "anthropic", "openai", "gemini"
+        self.ai_model = "llama-3.1-8b-instant"  # Modelo por defecto (Groq)
         
         # Configurar servicio de búsqueda
         self.enable_search = ENABLE_SEARCH
@@ -85,17 +100,81 @@ class ChatService:
                 print(f"[WARN] [Perfil] Error inicializando: {e}")
                 self.user_profile_service = None
         
+        # Configurar servicio de notas
+        self.notes_service = notes_service
+        if self.notes_service:
+            print("[OK] Sistema de notas activado")
+        elif NotesService:
+            try:
+                self.notes_service = NotesService()
+                print("[OK] Sistema de notas inicializado")
+            except Exception as e:
+                print(f"[WARN] [Notas] Error inicializando: {e}")
+                self.notes_service = None
+        
+        # Configurar servicio de onboarding
+        try:
+            from services.onboarding_service import OnboardingService
+            self.onboarding_service = onboarding_service
+            if not self.onboarding_service and self.user_profile_service:
+                self.onboarding_service = OnboardingService(self.user_profile_service)
+                print("[OK] Sistema de onboarding inicializado")
+            elif self.onboarding_service:
+                print("[OK] Sistema de onboarding activado")
+            else:
+                self.onboarding_service = None
+        except ImportError:
+            self.onboarding_service = None
+            print("[WARN] OnboardingService no disponible")
+        
         # Log de configuración (solo al iniciar)
-        if self.use_ai and self.groq_api_key:
-            print("[OK] IA activada - Usando Groq API")
+        if self.use_ai:
+            if self.ai_provider == "gemini" and self.gemini_api_key:
+                print("[OK] IA activada - Usando Google Gemini API (recomendado, gratis)")
+                # El SDK de Google Gemini usa "gemini-1.5-flash" o "gemini-1.5-pro" por defecto
+                self.ai_model = "gemini-1.5-flash"  # Modelo rápido y gratuito
+            elif self.ai_provider == "anthropic" and self.anthropic_api_key:
+                print("[OK] IA activada - Usando Anthropic Claude API (Cursor Premium)")
+                self.ai_model = "claude-3-5-sonnet-20241022"  # Modelo más potente de Claude
+            elif self.ai_provider == "openai" and self.openai_api_key:
+                print("[OK] IA activada - Usando OpenAI GPT API")
+                self.ai_model = "gpt-4"
+            elif self.groq_api_key:
+                print("[OK] IA activada - Usando Groq API (gratis)")
+            else:
+                print("[WARN] IA activada pero no hay API key configurada")
+                self.use_ai = False
         else:
-            print("[INFO] Modo basico - IA desactivada o API key no configurada")
+            print("[INFO] Modo basico - IA desactivada")
     
     async def process_message(self, user_message: str, session_id: str, history: List[Dict]) -> str:
         """
         Procesa el mensaje del usuario y genera una respuesta
         """
         message_lower = user_message.lower().strip()
+        
+        # PRIORIDAD MÁXIMA: Verificar si está en proceso de onboarding
+        if self.onboarding_service and not self.onboarding_service.is_onboarding_complete(session_id):
+            # Está en onboarding - procesar respuesta
+            onboarding_result = self.onboarding_service.process_onboarding_response(session_id, user_message)
+            
+            if onboarding_result["completed"]:
+                # Onboarding completado
+                return onboarding_result["response"]
+            else:
+                # Siguiente pregunta o respuesta intermedia
+                response = onboarding_result["response"] or onboarding_result.get("next_question")
+                if response:
+                    return response
+        
+        # PRIORIDAD 0.5: Si el onboarding no está completo (sin importar historial), iniciar onboarding
+        if (self.onboarding_service and 
+            not self.onboarding_service.is_onboarding_complete(session_id)):
+            # Verificar si ya se inició el onboarding en este mensaje
+            # Si no, iniciar ahora
+            first_question = self.onboarding_service.get_onboarding_question(session_id)
+            if first_question:
+                return first_question
         
         # Extraer información del usuario si está disponible (para perfil personal)
         if self.user_profile_service:
@@ -176,8 +255,9 @@ class ChatService:
         
         # Buscar patrones que indiquen crear un recordatorio
         reminder_keywords = [
-            "recuérdame", "recordarme", "recordar", "recuerda", 
-            "recuerdame", "recuardame", "quiero que me recuerdes",
+            "recuérdame", "recordarme", "recordar", "recuerda", "recuerdes",
+            "recuerdame", "recuardame", "quiero que me recuerdes", "que me recuerdes",
+            "lo que quiero hacer es que me recuerdes", "quiero que recuerdes",
             "puedes recordarme", "puedes recordar", "necesito que recuerdes",
             "hacemos un recordatorio", "hacemos recordatorio", "haceme un recordatorio", "hazme un recordatorio",
             "crea un recordatorio", "crear un recordatorio", "añade un recordatorio",
@@ -191,10 +271,11 @@ class ChatService:
         has_reminder_keyword = any(keyword in message_lower for keyword in reminder_keywords)
         
         # También verificar si menciona hora/fecha específica (indicador fuerte de recordatorio)
-        has_time_reference = bool(re.search(r'\d{1,2}:\d{2}|a las \d+|en \d+ (minutos?|horas?)', message_lower))
+        # Incluir "dentro de X minutos/horas" que es muy común
+        has_time_reference = bool(re.search(r'\d{1,2}:\d{2}|a las \d+|en \d+ (minutos?|horas?)|dentro de \d+ (minutos?|horas?)', message_lower))
         
-        # Si tiene palabra clave de recordatorio O menciona tiempo específico con "recordatorio"
-        if has_reminder_keyword or (has_time_reference and "recordatorio" in message_lower):
+        # Si tiene palabra clave de recordatorio O menciona tiempo específico con contexto de recordar
+        if has_reminder_keyword or (has_time_reference and ("recordatorio" in message_lower or "recuerd" in message_lower)):
             # Verificar que NO sea solo una pregunta sobre recordatorios
             list_reminder_patterns = ["tengo recordatorios", "mis recordatorios", "qué recordatorios tengo"]
             is_listing = any(pattern in message_lower for pattern in list_reminder_patterns)
@@ -206,14 +287,49 @@ class ChatService:
         if message_lower.startswith("eliminar recordatorio") or message_lower.startswith("borrar recordatorio"):
             return await self._handle_delete_reminder(user_message, session_id)
         
-        # PRIORIDAD 4: Verificar comandos de búsqueda
+        # PRIORIDAD 3.5: Verificar comandos de notas (ANTES de búsqueda e IA)
+        # Usar IA para entender mejor las intenciones si los patrones fallan
+        if self.notes_service:
+            note_command = self.notes_service.parse_note_command(user_message)
+            if note_command.get("action"):
+                return await self._handle_note_command(note_command, session_id)
+            
+            # Si no detectó comando pero hay palabras clave de notas, usar IA para interpretar
+            note_keywords = ["nota", "notas", "crear nota", "agregar a nota", "leer nota", "eliminar nota"]
+            if any(keyword in message_lower for keyword in note_keywords):
+                # Usar IA para entender la intención
+                intent = await self._interpret_note_intent(user_message, session_id)
+                if intent and intent.get("action"):
+                    return await self._handle_note_command(intent, session_id)
+        
+        # PRIORIDAD 4: Interceptar saludos con "Ecko" o "eco" ANTES de llegar a la IA
+        greetings_list = ["hola", "hi", "hey", "buenos días", "buenas tardes", "buenas noches", "buen día"]
+        if ("ecko" in message_lower or "eco" in message_lower) and any(g in message_lower for g in greetings_list):
+            # El usuario saluda a Ecko directamente (ej: "buen día Ecko", "hola Ecko", "buen día eco")
+            # Interceptar ANTES de llegar a la IA para evitar que responda "Hola Ecko" o "Buen día, Eco"
+            if self.user_profile_service:
+                profile = self.user_profile_service.get_or_create_profile(session_id)
+                name_or_title = profile.get("preferred_title") or profile.get("name") or "Señor"
+                user_messages_count = len([msg for msg in history if msg.get("role") == "user"])
+                if user_messages_count > 1:
+                    return f"Buen día, {name_or_title}. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                else:
+                    return f"Buen día, {name_or_title}. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+            else:
+                user_messages_count = len([msg for msg in history if msg.get("role") == "user"])
+                if user_messages_count > 1:
+                    return "Buen día. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                else:
+                    return "Buen día. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+        
+        # PRIORIDAD 4.5: Verificar comandos de búsqueda
         search_commands = ["buscar", "busca", "qué es", "que es", "quien es", "quién es", "noticias"]
         if self.search_service and any(message_lower.startswith(cmd) for cmd in search_commands):
             return await self._handle_search(user_message, message_lower)
         
         # PRIORIDAD 5: Si la IA está habilitada y hay API key, usar IA (ÚLTIMO)
         # Solo usar respuestas básicas si la IA falla o está desactivada
-        if self.use_ai and self.groq_api_key:
+        if self.use_ai and (self.groq_api_key or self.anthropic_api_key or self.openai_api_key or self.gemini_api_key):
             try:
                 print(f"🤖 [IA] Procesando: '{user_message}' (historial: {len(history)} mensajes)")
                 
@@ -296,12 +412,13 @@ También puedes conversar conmigo normalmente. Puedo buscar información en inte
         # Extraer el texto después de "recordar" o "recuérdame" - más flexible
         # Busca patrones como: "recordame", "recuérdame", "hacemos un recordatorio", etc.
         patterns = [
+            r'lo\s+que\s+quiero\s+hacer\s+es\s+que\s+me\s+recuerdes?\s+(?:ahora\s+)?(?:dentro\s+de\s+\d+\s+(?:minutos?|horas?)\s+)?(?:que\s+)?(.+)',  # "lo que quiero hacer es que me recuerdes ahora dentro de 2 minutos que..."
             r'(?:un\s+)?recordatorio\s+(?:ahora\s+)?(?:a las\s+)?(?:\d{1,2}:\d{2}\s+)?(?:que diga|que|de)\s+(.+)',  # "un recordatorio a las 15:10 que diga..."
             r'(?:un\s+)?recordatorio\s+(?:hoy|mañana|ahora)\s+(?:a las\s+)?(?:\d{1,2}:\d{2}\s+)?(?:que diga|que|de)\s+(.+)',  # "un recordatorio hoy a las 15:10 que diga..."
             r'm[áa]ndame\s+(?:un\s+)?(?:mensaje|recordatorio|notificaci[oó]n)\s+(?:a las\s+)?(?:\d{1,2}:\d{2}\s+)?(?:que diga|que|de)\s+(.+)',  # "mándame un recordatorio a las 15:10 que diga..."
             r'(?:no\s+)?(?:solo\s+)?m[áa]ndame\s+(?:a las\s+)?(?:\d{1,2}:\d{2}\s+)?(?:un\s+)?(?:mensaje|recordatorio|notificaci[oó]n)\s+(?:que diga|que|de)\s+(.+)',  # "no solo mándame a las 15:10 un recordatorio que diga..."
-            r'rec(?:u|o)rd(?:a|e)(?:r|me|rme)?\s+(?:ahora\s+)?(?:en\s+\d+\s+(?:minutos?|horas?)\s+)?(?:que\s+)?(.+)',  # "recordame ahora en 2 minutos que..."
-            r'(?:quiero\s+)?(?:que\s+)?me\s+recuerdes?\s+(?:que\s+)?(.+)',  # "quiero que me recuerdes que ..."
+            r'rec(?:u|o)rd(?:a|e)(?:r|me|rme)?\s+(?:ahora\s+)?(?:en\s+\d+\s+(?:minutos?|horas?)\s+|dentro\s+de\s+\d+\s+(?:minutos?|horas?)\s+)?(?:que\s+)?(.+)',  # "recordame ahora en 2 minutos que..." o "dentro de 2 minutos"
+            r'(?:quiero\s+)?(?:que\s+)?me\s+recuerdes?\s+(?:ahora\s+)?(?:dentro\s+de\s+\d+\s+(?:minutos?|horas?)\s+)?(?:que\s+)?(.+)',  # "quiero que me recuerdes que ..." o "que me recuerdes ahora dentro de 2 minutos"
             r'puedes?\s+recuerd(?:a|arme)?\s+(?:que\s+)?(.+)',  # "puedes recordarme que ..."
             r'(?:hacemos|haceme|hazme)\s+un\s+recordatorio\s+(?:que\s+)?(.+)',  # "hacemos un recordatorio que ..."
             r'cre(?:a|ar|amos)?\s+(?:un\s+)?recordatorio\s+(?:que\s+)?(.+)',  # "crea un recordatorio que ..."
@@ -435,6 +552,112 @@ También puedes conversar conmigo normalmente. Puedo buscar información en inte
         else:
             return "⚠️ Por favor especifica el número del recordatorio. Ejemplo: 'eliminar recordatorio 1'"
     
+    async def _handle_note_command(self, command: Dict, session_id: str) -> str:
+        """Manejar comandos de notas"""
+        if not self.notes_service:
+            return "⚠️ El sistema de notas no está disponible."
+        
+        action = command.get("action")
+        
+        if action == "create":
+            title = command.get("title", "").strip()
+            content = command.get("content", "").strip()
+            
+            if not title:
+                return "⚠️ Por favor especifica un nombre para la nota. Ejemplo: 'abre una nota nombre compras'"
+            
+            note = self.notes_service.create_note(session_id, title, content)
+            response = f"✅ Nota '{title}' creada"
+            if content:
+                response += f" con el contenido: {content}"
+            return response
+        
+        elif action == "read":
+            title = command.get("title", "").strip()
+            if not title:
+                return "⚠️ Por favor especifica el nombre de la nota. Ejemplo: 'dime la nota compras'"
+            
+            note = self.notes_service.get_note_by_title(session_id, title)
+            if not note:
+                return f"⚠️ No encontré una nota llamada '{title}'. ¿Quieres crearla?"
+            
+            content = note.get("content", "")
+            if not content:
+                return f"📝 La nota '{title}' está vacía. Puedes agregarle contenido diciendo 'agrega a la nota {title} que...'"
+            
+            return f"📝 Nota '{title}':\n\n{content}"
+        
+        elif action == "append":
+            title = command.get("title", "").strip()
+            content = command.get("content", "").strip()
+            
+            if not title:
+                return "⚠️ Por favor especifica el nombre de la nota."
+            if not content:
+                return "⚠️ Por favor especifica qué quieres agregar a la nota."
+            
+            note = self.notes_service.get_note_by_title(session_id, title)
+            if not note:
+                return f"⚠️ No encontré una nota llamada '{title}'. ¿Quieres crearla primero?"
+            
+            updated_note = self.notes_service.append_to_note(session_id, note["id"], content)
+            if updated_note:
+                return f"✅ Agregado a la nota '{title}': {content}"
+            else:
+                return "⚠️ Error al agregar contenido a la nota."
+        
+        elif action == "overwrite":
+            title = command.get("title", "").strip()
+            content = command.get("content", "").strip()
+            
+            if not title:
+                return "⚠️ Por favor especifica el nombre de la nota."
+            if not content:
+                return "⚠️ Por favor especifica el nuevo contenido de la nota."
+            
+            note = self.notes_service.get_note_by_title(session_id, title)
+            if not note:
+                return f"⚠️ No encontré una nota llamada '{title}'. ¿Quieres crearla primero?"
+            
+            updated_note = self.notes_service.overwrite_note(session_id, note["id"], content)
+            if updated_note:
+                return f"✅ Nota '{title}' actualizada con: {content}"
+            else:
+                return "⚠️ Error al actualizar la nota."
+        
+        elif action == "delete":
+            title = command.get("title", "").strip()
+            if not title:
+                return "⚠️ Por favor especifica el nombre de la nota a eliminar."
+            
+            note = self.notes_service.get_note_by_title(session_id, title)
+            if not note:
+                return f"⚠️ No encontré una nota llamada '{title}'."
+            
+            if self.notes_service.delete_note(session_id, note["id"]):
+                return f"✅ Nota '{title}' eliminada."
+            else:
+                return "⚠️ Error al eliminar la nota."
+        
+        elif action == "list":
+            notes = self.notes_service.list_notes(session_id)
+            if not notes:
+                return "📝 No tienes notas guardadas. Puedes crear una diciendo 'abre una nota nombre [nombre]'"
+            
+            response = f"📝 Tienes {len(notes)} nota(s):\n\n"
+            for i, note in enumerate(notes, 1):
+                content_preview = note.get("content", "")[:50]
+                if len(note.get("content", "")) > 50:
+                    content_preview += "..."
+                response += f"{i}. **{note['title']}**"
+                if content_preview:
+                    response += f" - {content_preview}"
+                response += "\n"
+            
+            return response
+        
+        return "⚠️ Comando de nota no reconocido."
+    
     async def _handle_search(self, user_message: str, message_lower: str) -> str:
         """Manejar comandos de búsqueda web"""
         if not self.search_service:
@@ -528,10 +751,30 @@ También puedes conversar conmigo normalmente. Puedo buscar información en inte
         thanks = ["gracias", "thanks", "thank you", "grax", "thx"]
         questions = ["qué", "cómo", "cuándo", "dónde", "por qué", "quién", "cuál", "cuáles"]
         
+        # PRIORIDAD ALTA: Interceptar saludos con "Ecko" o "eco" ANTES de llegar a la IA
+        if ("ecko" in message_lower or "eco" in message_lower) and any(g in message_lower for g in greetings):
+            # El usuario saluda a Ecko directamente (ej: "buen día Ecko", "hola Ecko", "buen día eco")
+            # Interceptar ANTES de llegar a la IA para evitar que responda "Hola Ecko" o "Buen día, Eco"
+            if self.user_profile_service:
+                profile = self.user_profile_service.get_or_create_profile(session_id)
+                name_or_title = profile.get("preferred_title") or profile.get("name") or "Señor"
+                # Verificar si hay mucho historial (más de 2 mensajes del usuario)
+                user_messages_count = len([msg for msg in history if msg.get("role") == "user"])
+                if user_messages_count > 1:
+                    return f"Buen día, {name_or_title}. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                else:
+                    return f"Buen día, {name_or_title}. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+            else:
+                user_messages_count = len([msg for msg in history if msg.get("role") == "user"])
+                if user_messages_count > 1:
+                    return "Buen día. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                else:
+                    return "Buen día. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+        
         # Verificar saludos (debe ser al inicio del mensaje o como palabra completa)
         for greeting in greetings:
             if message_lower == greeting or message_lower.startswith(greeting + " ") or message_lower.endswith(" " + greeting):
-                if len(history) > 0:
+                if len(history) > 1:
                     # Si hay perfil de usuario, personalizar saludo
                     if self.user_profile_service:
                         name_or_title = self.user_profile_service.get_user_greeting(session_id)
@@ -627,14 +870,12 @@ También puedes conversar conmigo normalmente. Puedo buscar información en inte
     
     async def _generate_ai_response(self, user_message: str, history: List[Dict], session_id: str, search_result: Optional[Dict] = None) -> str:
         """
-        Genera una respuesta usando Groq API (IA gratuita) - usando requests directamente
+        Genera una respuesta usando IA - soporta Groq, Anthropic Claude, y OpenAI
         Puede incluir resultados de búsqueda web para información actualizada
         """
         try:
             import aiohttp
             import json
-            
-            print(f"🔗 [IA] Conectando a Groq API...")
             
             # Personalizar system prompt con información del usuario (estilo Jarvis)
             user_name = None
@@ -645,19 +886,29 @@ También puedes conversar conmigo normalmente. Puedo buscar información en inte
                 user_title = profile.get("preferred_title") or user_name or "Señor"
             
             system_prompt = f"""Eres Ecko, un asistente virtual personal estilo Jarvis de Iron Man. 
-Responde en español de manera conversacional, natural y profesional pero amigable.
-Trata al usuario como "{user_title}" o usa su nombre si lo conoces. 
-Sé preciso, útil y proactivo como Jarvis.
+
+TU IDENTIDAD (MUY IMPORTANTE):
+- Tu nombre ES "Ecko" (con K). NO eres "Eco", "eco" ni "ECKO". Tu nombre completo es "Ecko".
+- Cuando el usuario te dice "buen día Ecko" o "hola Ecko" o menciona "Ecko" o "eco", está saludándote A TI directamente.
+- NUNCA respondas con "Hola Ecko" o "Buen día, Eco" de vuelta. Responde como Ecko saludando al usuario.
+- Ejemplo CORRECTO si el usuario dice "buen día Ecko, ¿cómo estás?": "Buen día, {user_title}. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+- Ejemplo INCORRECTO (NUNCA hagas esto): "Hola Ecko" / "Buen día, Eco" / "Hola, soy Ecko"
+- Si el usuario menciona "Ecko" o "eco" en su mensaje, está dirigiéndose a ti. Responde directamente sin mencionar tu propio nombre.
+
+RESPUESTAS Y PERSONALIDAD:
+- Responde en español de manera conversacional, natural y profesional pero amigable.
+- Trata al usuario como "{user_title}" o usa su nombre si lo conoces. 
+- Sé preciso, útil y proactivo como Jarvis.
+- Mantén las respuestas cortas y relevantes (máximo 2-3 frases).
+- Actúa como un verdadero asistente personal: recuerda información del usuario, sus preferencias y contexto.
 
 REGLAS IMPORTANTES:
 - NUNCA inventes información que no tengas. Si no sabes algo o no tienes datos, dilo claramente.
 - Si te preguntan por tareas, calendario, eventos o recordatorios, SOLO menciona los que realmente existan.
 - Si no hay recordatorios/tareas, di claramente "No tienes recordatorios/tareas pendientes" en lugar de inventar.
 - NO inventes eventos, reuniones, vuelos o citas que no existan.
-- Mantén las respuestas cortas y relevantes (máximo 2-3 frases).
 - Cuando el usuario te diga su nombre o información personal, guárdala para futuras conversaciones.
-- Si se te proporciona información de búsqueda web, úsala para responder con datos actualizados y precisos.
-- Actúa como un verdadero asistente personal: recuerda información del usuario, sus preferencias y contexto."""
+- Si se te proporciona información de búsqueda web, úsala para responder con datos actualizados y precisos."""
             
             # Si hay resultados de búsqueda, incluirlos en el contexto
             user_message_with_context = user_message
@@ -684,37 +935,20 @@ Usa la información de búsqueda para responder de manera precisa y actualizada.
             # Añadir el mensaje actual del usuario (con contexto de búsqueda si existe)
             messages.append({"role": "user", "content": user_message_with_context})
             
-            print(f"📤 [IA] Enviando request a Groq ({len(messages)} mensajes)...")
-            
-            # URL de la API de Groq
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            
-            # Headers
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Datos del request
-            payload = {
-                "messages": messages,
-                "model": self.ai_model,
-                "temperature": 0.7,
-                "max_tokens": 300,
-                "top_p": 0.9,
-            }
-            
-            # Llamar a la API usando aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"API Error {response.status}: {error_text}")
-                    
-                    data = await response.json()
-                    ai_response = data["choices"][0]["message"]["content"].strip()
-                    print(f"📥 [IA] Respuesta recibida: {ai_response[:50]}...")
-                    return ai_response
+            # Seleccionar provider y llamar a la API correspondiente
+            if self.ai_provider == "gemini" and self.gemini_api_key:
+                print(f"🔗 [IA] Conectando a Google Gemini API...")
+                return await self._call_gemini_api(messages, user_message_with_context)
+            elif self.ai_provider == "anthropic" and self.anthropic_api_key:
+                print(f"🔗 [IA] Conectando a Anthropic Claude API...")
+                return await self._call_anthropic_api(messages, user_message_with_context)
+            elif self.ai_provider == "openai" and self.openai_api_key:
+                print(f"🔗 [IA] Conectando a OpenAI API...")
+                return await self._call_openai_api(messages)
+            else:
+                # Default: Groq
+                print(f"🔗 [IA] Conectando a Groq API...")
+                return await self._call_groq_api(messages)
             
         except ImportError:
             raise Exception("La librería 'aiohttp' no está instalada. Instala con: pip install aiohttp")
@@ -722,4 +956,348 @@ Usa la información de búsqueda para responder de manera precisa y actualizada.
             error_msg = str(e)
             print(f"[ERROR] [IA] Error en API: {type(e).__name__}: {error_msg}")
             raise Exception(f"Error comunicándose con la API de IA: {error_msg}")
+    
+    async def _call_groq_api(self, messages: List[Dict]) -> str:
+        """Llamar a Groq API"""
+        import aiohttp
+        
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.groq_api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "messages": messages,
+            "model": self.ai_model,
+            "temperature": 0.7,
+            "max_tokens": 300,
+            "top_p": 0.9,
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"API Error {response.status}: {error_text}")
+                
+                data = await response.json()
+                ai_response = data["choices"][0]["message"]["content"].strip()
+                print(f"📥 [IA] Respuesta recibida: {ai_response[:50]}...")
+                return ai_response
+    
+    async def _call_anthropic_api(self, messages: List[Dict], user_message: str) -> str:
+        """Llamar a Anthropic Claude API (Cursor Premium)"""
+        import aiohttp
+        
+        url = "https://api.anthropic.com/v1/messages"
+        
+        # Convertir mensajes de OpenAI format a Anthropic format
+        system_prompt = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        conversation_messages = [msg for msg in messages if msg["role"] != "system"]
+        
+        headers = {
+            "x-api-key": self.anthropic_api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": self.ai_model,
+            "max_tokens": 300,
+            "temperature": 0.7,
+            "messages": conversation_messages
+        }
+        
+        if system_prompt:
+            payload["system"] = system_prompt
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"API Error {response.status}: {error_text}")
+                
+                data = await response.json()
+                # Anthropic devuelve el contenido en data["content"][0]["text"]
+                ai_response = data["content"][0]["text"].strip()
+                print(f"📥 [IA] Respuesta recibida: {ai_response[:50]}...")
+                return ai_response
+    
+    async def _call_openai_api(self, messages: List[Dict]) -> str:
+        """Llamar a OpenAI API"""
+        import aiohttp
+        
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.openai_api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "messages": messages,
+            "model": self.ai_model,
+            "temperature": 0.7,
+            "max_tokens": 300,
+            "top_p": 0.9,
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"API Error {response.status}: {error_text}")
+                
+                data = await response.json()
+                ai_response = data["choices"][0]["message"]["content"].strip()
+                print(f"📥 [IA] Respuesta recibida: {ai_response[:50]}...")
+                return ai_response
+    
+    async def _call_gemini_api(self, messages: List[Dict], user_message: str) -> str:
+        """Llamar a Google Gemini API usando el SDK oficial"""
+        try:
+            import google.generativeai as genai
+            import asyncio
+        except ImportError:
+            raise Exception("google-generativeai no está instalado. Ejecuta: pip install google-generativeai")
+        
+        # Configurar la API key
+        genai.configure(api_key=self.gemini_api_key)
+        
+        # Extraer system prompt si existe
+        system_prompt = ""
+        conversation_history = []
+        
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                system_prompt = content
+            elif role == "user":
+                conversation_history.append({"role": "user", "parts": [{"text": content}]})
+            elif role == "assistant":
+                conversation_history.append({"role": "model", "parts": [{"text": content}]})
+        
+        # Si no hay historial, crear uno con el mensaje del usuario
+        if not conversation_history:
+            conversation_history = [{"role": "user", "parts": [{"text": user_message}]}]
+        
+        # Obtener el modelo
+        model_name = getattr(self, 'ai_model', "gemini-1.5-flash")
+        try:
+            model = genai.GenerativeModel(model_name)
+        except Exception as e:
+            # Si el modelo no está disponible, intentar con gemini-1.5-flash
+            print(f"[WARN] Modelo {model_name} no disponible, usando gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        # Configurar el sistema de generación
+        generation_config = {
+            "temperature": 0.7,
+            "top_k": 40,
+            "top_p": 0.95,
+            "max_output_tokens": 1024,
+        }
+        
+        # Preparar el contenido para el chat
+        # Si hay system prompt, añadirlo al primer mensaje
+        if system_prompt:
+            if conversation_history and conversation_history[0]["role"] == "user":
+                original_text = conversation_history[0]["parts"][0]["text"]
+                conversation_history[0]["parts"][0]["text"] = f"{system_prompt}\n\n{original_text}"
+        
+        # Construir el historial en formato del SDK de Gemini
+        # El SDK necesita una lista de dicts con "role" y "parts"
+        history_for_chat = []
+        for msg in conversation_history:
+            role = msg["role"]
+            text = msg["parts"][0]["text"]
+            history_for_chat.append({
+                "role": role,
+                "parts": [{"text": text}]
+            })
+        
+        # Si tenemos historial, usar start_chat con el historial completo menos el último mensaje
+        # y luego enviar el último mensaje
+        if len(history_for_chat) > 1:
+            # Crear el chat con el historial (todos menos el último)
+            chat = model.start_chat(history=history_for_chat[:-1])
+            # Enviar el último mensaje
+            last_message = history_for_chat[-1]["parts"][0]["text"]
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: chat.send_message(last_message, generation_config=generation_config)
+            )
+        else:
+            # Solo hay un mensaje, generar directamente
+            single_message = history_for_chat[0]["parts"][0]["text"]
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: model.generate_content(single_message, generation_config=generation_config)
+            )
+        
+        ai_response = response.text.strip()
+        print(f"📥 [IA] Respuesta recibida: {ai_response[:50]}...")
+        return ai_response
+    
+    async def _interpret_note_intent(self, message: str, session_id: str) -> Optional[Dict]:
+        """Usar IA para interpretar la intención de comandos de notas de forma más fluida"""
+        if not self.use_ai or not (self.groq_api_key or self.anthropic_api_key or self.openai_api_key or self.gemini_api_key):
+            return None
+        
+        try:
+            import aiohttp
+            import json
+            
+            # Crear un prompt específico para interpretar intenciones de notas
+            system_prompt = """Eres un asistente que analiza mensajes sobre notas y extrae la acción.
+Responde SOLO con JSON válido, sin texto adicional.
+
+Estructura:
+{
+    "action": "create|read|append|overwrite|delete|list|null",
+    "title": "nombre de la nota si aplica",
+    "content": "contenido si aplica"
+}"""
+
+            user_prompt = f"""Analiza este mensaje sobre notas:
+
+"{message}"
+
+Ejemplos:
+- "crea una nota supermercado y agrega comprar pan" -> {{"action": "create", "title": "supermercado", "content": "comprar pan"}}
+- "agrega champú a la nota supermercado" -> {{"action": "append", "title": "supermercado", "content": "champú"}}
+- "qué notas tengo" -> {{"action": "list"}}
+- "dime la nota supermercado" -> {{"action": "read", "title": "supermercado"}}
+
+Si no es un comando de notas, retorna {{"action": null}}."""
+
+            # Llamar directamente a la API sin pasar por el sistema de historial
+            if self.ai_provider == "gemini" and self.gemini_api_key:
+                try:
+                    import google.generativeai as genai
+                    import asyncio
+                    
+                    # Configurar la API key
+                    genai.configure(api_key=self.gemini_api_key)
+                    
+                    # Obtener el modelo
+                    model_name = getattr(self, 'ai_model', "gemini-1.5-flash")
+                    try:
+                        model = genai.GenerativeModel(model_name)
+                    except:
+                        model = genai.GenerativeModel("gemini-1.5-flash")
+                    
+                    # Generar respuesta
+                    full_prompt = f"{system_prompt}\n\n{user_prompt}"
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: model.generate_content(
+                            full_prompt,
+                            generation_config={
+                                "temperature": 0.1,
+                                "max_output_tokens": 150,
+                            }
+                        )
+                    )
+                    
+                    ai_response = response.text.strip()
+                except Exception as e:
+                    print(f"[WARN] Error usando SDK de Gemini: {e}")
+                    return None
+            elif self.ai_provider == "anthropic" and self.anthropic_api_key:
+                url = "https://api.anthropic.com/v1/messages"
+                headers = {
+                    "x-api-key": self.anthropic_api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": self.ai_model,
+                    "max_tokens": 150,
+                    "temperature": 0.1,  # Baja temperatura para respuestas más deterministas
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}]
+                }
+            elif self.ai_provider == "openai" and self.openai_api_key:
+                url = "https://api.openai.com/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.openai_api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "model": self.ai_model,
+                    "temperature": 0.1,
+                    "max_tokens": 150
+                }
+            else:
+                # Groq
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.groq_api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "model": self.ai_model,
+                    "temperature": 0.1,
+                    "max_tokens": 150
+                }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status != 200:
+                        return None
+                    
+                    data = await response.json()
+                    
+                    # Extraer respuesta según el provider
+                    if self.ai_provider == "gemini":
+                        # Gemini devuelve: data["candidates"][0]["content"]["parts"][0]["text"]
+                        if "candidates" in data and len(data["candidates"]) > 0:
+                            candidate = data["candidates"][0]
+                            if "content" in candidate and "parts" in candidate["content"]:
+                                parts = candidate["content"]["parts"]
+                                if parts and len(parts) > 0 and "text" in parts[0]:
+                                    ai_response = parts[0]["text"].strip()
+                                else:
+                                    return None
+                            else:
+                                return None
+                        else:
+                            return None
+                    elif self.ai_provider == "anthropic":
+                        ai_response = data["content"][0]["text"].strip()
+                    else:
+                        ai_response = data["choices"][0]["message"]["content"].strip()
+                    
+                    # Parsear JSON
+                    ai_response = ai_response.strip()
+                    # Limpiar si tiene markdown
+                    if ai_response.startswith("```"):
+                        parts = ai_response.split("```")
+                        if len(parts) >= 2:
+                            ai_response = parts[1]
+                            if ai_response.startswith("json"):
+                                ai_response = ai_response[4:]
+                            ai_response = ai_response.strip()
+                    
+                    intent = json.loads(ai_response)
+                    return intent if intent.get("action") and intent.get("action") != "null" else None
+            
+        except json.JSONDecodeError as e:
+            print(f"[WARN] Error parseando JSON de intención: {e}")
+            return None
+        except Exception as e:
+            print(f"[WARN] Error interpretando intención con IA: {e}")
+            return None
 

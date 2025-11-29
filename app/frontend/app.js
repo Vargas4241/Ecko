@@ -14,8 +14,13 @@ class EckoChat {
         this.chatMessages = document.getElementById('chat-messages');
         this.sendButton = document.getElementById('send-button');
         this.voiceButton = document.getElementById('voice-button');
-        this.voiceStatus = document.getElementById('voice-status');
+        // voice-status eliminado - ahora solo se usa status-indicator (SISTEMA ONLINE / ESCUCHANDO)
         this.notificationsContainer = document.getElementById('notifications-container');
+        
+        // Elementos del diseño Jarvis
+        this.dataDisplay = document.getElementById('data-display');
+        this.statusIndicator = document.getElementById('status-indicator');
+        this.statusVoiceLine = document.getElementById('status-voice');
         
         // Sistema de notificaciones
         this.notificationInterval = null;
@@ -30,7 +35,13 @@ class EckoChat {
         this.pendingVoiceMessage = null;
         this.voiceMessageSent = false;
         
-        console.log('🔧 Constructor EckoChat ejecutado');
+        // Modo Jarvis - Voice-first
+        this.jarvisMode = true; // Siempre activo ahora
+        
+        // Timeout para el display de datos
+        this.dataDisplayTimeout = null;
+        
+        console.log('🔧 Constructor EckoChat ejecutado (Modo Jarvis)');
         this.init();
     }
 
@@ -159,7 +170,8 @@ class EckoChat {
             console.log('🎤 Reconocimiento iniciado');
             this.isListening = true;
             this.updateVoiceButton(true);
-            this.showVoiceStatus('🎤 Escuchando...');
+            // Solo usar updateStatus - muestra "ESCUCHANDO" en el status-indicator
+            this.updateStatus('Escuchando', true);
         };
 
         this.recognition.onresult = async (event) => {
@@ -186,7 +198,8 @@ class EckoChat {
             console.log('✅ Texto reconocido:', currentTranscript, 'Final:', !!allFinal, 'Interim:', interimTranscript);
             
             if (!currentTranscript) {
-                this.showVoiceStatus('No se detectó habla. Intenta de nuevo.', 'error');
+                this.updateStatus('No se detectó habla', false);
+                setTimeout(() => this.updateStatus('Listo', false), 2000);
                 return;
             }
             
@@ -205,7 +218,8 @@ class EckoChat {
             
             // Si hay resultados finales, esperar silencio antes de enviar
             if (allFinal) {
-                this.showVoiceStatus('🎤 Escuchando... (esperando más o finaliza con silencio)', 'info');
+                // Solo usar updateStatus
+                this.updateStatus('Escuchando', true);
                 
                 // Cancelar timeout anterior
                 if (this.silenceTimeout) {
@@ -216,13 +230,15 @@ class EckoChat {
                 this.silenceTimeout = setTimeout(() => {
                     if (this.pendingVoiceMessage && !this.voiceMessageSent) {
                         console.log('⏱️ Silencio detectado, enviando mensaje...');
-                        this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                // Solo usar updateStatus
+                this.updateStatus('Enviando...', false);
                         this.sendPendingVoiceMessage();
                     }
                 }, this.silenceDuration);
             } else {
                 // Resultados provisionales - mostrar que está escuchando
-                this.showVoiceStatus('🎤 Escuchando...', 'info');
+                // Solo usar updateStatus
+                this.updateStatus('Escuchando', true);
                 
                 // Resetear timeout si hay actividad
                 if (this.silenceTimeout) {
@@ -234,7 +250,8 @@ class EckoChat {
                     this.silenceTimeout = setTimeout(() => {
                         if (this.pendingVoiceMessage && !this.voiceMessageSent) {
                             console.log('⏱️ Silencio después de interim, enviando...');
-                            this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                // Solo usar updateStatus
+                this.updateStatus('Enviando...', false);
                             this.sendPendingVoiceMessage();
                         }
                     }, this.silenceDuration);
@@ -246,7 +263,8 @@ class EckoChat {
             console.error('❌ Error:', event.error);
             this.isListening = false;
             this.updateVoiceButton(false);
-            this.hideVoiceStatus();
+            // No usar hideVoiceStatus, solo actualizar estado
+            this.updateStatus('Error', false);
             
             let errorMsg = 'Error al reconocer voz. ';
             switch(event.error) {
@@ -261,8 +279,9 @@ class EckoChat {
                     break;
             }
             
-            this.showVoiceStatus(errorMsg, 'error');
-            setTimeout(() => this.hideVoiceStatus(), 4000);
+            // Mostrar error en el status
+            this.updateStatus('Error', false);
+            setTimeout(() => this.updateStatus('Listo', false), 4000);
         };
 
         this.recognition.onend = () => {
@@ -279,19 +298,22 @@ class EckoChat {
             
             this.isListening = false;
             this.updateVoiceButton(false);
+            this.updateStatus('Procesando', false);
             
             // Si hay un mensaje pendiente que no se ha enviado, esperar un poco más y enviarlo
             if (this.pendingVoiceMessage && !this.voiceMessageSent) {
                 console.log('📤 Enviando mensaje pendiente desde onend después de timeout');
+                this.updateStatus('Enviando...', false);
                 // Esperar un poco más para asegurar que capturamos todo
                 setTimeout(() => {
                     if (this.pendingVoiceMessage && !this.voiceMessageSent) {
-                        this.showVoiceStatus('✅ Mensaje reconocido. Enviando...', 'info');
+                        // Solo usar updateStatus
+                        this.updateStatus('Enviando...', false);
                         this.sendPendingVoiceMessage();
                     }
                 }, 500);
             } else if (!this.voiceFromAudio && !this.pendingVoiceMessage) {
-                setTimeout(() => this.hideVoiceStatus(), 1000);
+                this.updateStatus('Listo', false);
             }
         };
     }
@@ -449,24 +471,12 @@ class EckoChat {
     }
 
     showVoiceStatus(text, type = 'info') {
-        if (!this.voiceStatus) {
-            this.voiceStatus = document.getElementById('voice-status');
-        }
-        if (!this.voiceStatus) return;
-        
-        const statusText = this.voiceStatus.querySelector('.voice-status-text');
-        if (statusText) statusText.textContent = text;
-        this.voiceStatus.className = `voice-status ${type}`;
-        this.voiceStatus.style.display = 'block';
+        // Eliminado - ahora solo se usa el status-indicator
+        // El estado se muestra en "Sistema Online" y "Escuchando" / "Listo"
     }
 
     hideVoiceStatus() {
-        if (!this.voiceStatus) {
-            this.voiceStatus = document.getElementById('voice-status');
-        }
-        if (this.voiceStatus) {
-            this.voiceStatus.style.display = 'none';
-        }
+        // Eliminado - ahora solo se usa el status-indicator
     }
 
     sendPendingVoiceMessage() {
@@ -504,29 +514,34 @@ class EckoChat {
         if (this.messageInput) {
             this.messageInput.value = '';
         }
-        this.showVoiceStatus('📤 Enviando mensaje...', 'info');
+        // Solo usar updateStatus
+        this.updateStatus('Enviando...', false);
 
         try {
             const typingId = this.showTypingIndicator();
             const response = await this.sendMessage(messageText);
             this.removeTypingIndicator(typingId);
             this.addMessage('assistant', response.response);
+            this.updateStatus('Listo', false);
             
-            // Hablar la respuesta inmediatamente (ya que vino de voz)
+            // SIEMPRE hablar la respuesta cuando viene de voz (tipo Jarvis)
             // En móviles, TTS debe ejecutarse lo más rápido posible después de la interacción
             console.log('🎤 Mensaje de voz enviado, hablando respuesta inmediatamente...');
-            this.speakResponse(response.response);
+            // Forzar TTS inmediatamente (iOS Safari requiere interacción del usuario)
+            setTimeout(() => {
+                this.speakResponse(response.response);
+            }, 100); // Pequeño delay para asegurar que el navegador procese la respuesta
             
             if (response.session_id) {
                 this.sessionId = response.session_id;
             }
             
-            this.hideVoiceStatus();
+            // Estado ya actualizado arriba
         } catch (error) {
             console.error('Error:', error);
             this.addMessage('assistant', '❌ Lo siento, hubo un error. Por favor intenta de nuevo.');
-            this.showVoiceStatus('❌ Error al enviar mensaje', 'error');
-            setTimeout(() => this.hideVoiceStatus(), 3000);
+            this.updateStatus('Error', false);
+            setTimeout(() => this.updateStatus('Listo', false), 3000);
         } finally {
             this.setInputDisabled(false);
             this.voiceFromAudio = false;
@@ -597,16 +612,22 @@ class EckoChat {
         if (this.messageInput) {
             this.messageInput.value = '';
         }
-        this.hideVoiceStatus();
+        // Solo usar updateStatus
+        this.updateStatus('Procesando...', false);
 
         try {
             const typingId = this.showTypingIndicator();
             const response = await this.sendMessage(message);
             this.removeTypingIndicator(typingId);
             this.addMessage('assistant', response.response);
+            this.updateStatus('Listo', false);
             
+            // SIEMPRE hablar cuando viene de voz (tipo Jarvis - todo audio)
             if (wasFromVoice) {
-                this.speakResponse(response.response);
+                // Forzar TTS inmediatamente (iOS Safari requiere interacción del usuario)
+                setTimeout(() => {
+                    this.speakResponse(response.response);
+                }, 100);
             }
             
             if (response.session_id) {
@@ -642,24 +663,148 @@ class EckoChat {
     }
 
     addMessage(role, content) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${role}`;
+        // En modo Jarvis, NO mostramos mensajes normales - solo datos importantes
+        // El resto se habla
         
-        const time = new Date().toLocaleTimeString('es-ES', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
+        // Extraer datos importantes de la respuesta
+        const extractedData = this.extractImportantData(content);
+        
+        if (extractedData && this.jarvisMode) {
+            // Mostrar solo datos importantes en el display central
+            this.updateDataDisplay(extractedData);
+        } else if (!this.jarvisMode) {
+            // Modo chat tradicional (backup)
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            
+            const time = new Date().toLocaleTimeString('es-ES', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
 
-        messageDiv.innerHTML = `
-            <div class="message-content">
-                ${this.formatMessage(content)}
-            </div>
-            <div class="message-time">${time}</div>
-        `;
+            messageDiv.innerHTML = `
+                <div class="message-content">
+                    ${this.formatMessage(content)}
+                </div>
+                <div class="message-time">${time}</div>
+            `;
 
-        if (this.chatMessages) {
-            this.chatMessages.appendChild(messageDiv);
-            this.scrollToBottom();
+            if (this.chatMessages) {
+                this.chatMessages.appendChild(messageDiv);
+                this.scrollToBottom();
+            }
+        }
+        
+        // NO hablar aquí - se hablará desde handleSubmit/sendMessageFromVoice para evitar duplicados
+    }
+    
+    extractImportantData(text) {
+        /**
+         * Extrae datos importantes de una respuesta para mostrar en el display Jarvis
+         * Retorna null si no hay datos importantes
+         */
+        
+        // Datos a extraer: horas, fechas, números, nombres de notas, tareas, etc.
+        const data = {
+            type: null,
+            value: null,
+            label: null
+        };
+        
+        // Horas/fechas
+        const timeMatch = text.match(/(?:a las|las|son las)\s+(\d{1,2}:\d{2})/i);
+        if (timeMatch) {
+            data.type = 'time';
+            data.value = timeMatch[1];
+            data.label = 'Hora';
+            return data;
+        }
+        
+        // Recordatorios creados
+        if (text.includes('Recordatorio creado') || text.includes('recordatorio')) {
+            const reminderMatch = text.match(/['"]([^'"]+)['"]/);
+            if (reminderMatch) {
+                data.type = 'reminder';
+                data.value = reminderMatch[1];
+                data.label = 'Recordatorio';
+                return data;
+            }
+        }
+        
+        // Notas
+        if (text.includes('Nota') && (text.includes('creada') || text.includes('Nota:'))) {
+            const noteMatch = text.match(/Nota\s+['"]([^'"]+)['"]/i) || text.match(/Nota\s+'([^']+)'/i);
+            if (noteMatch) {
+                data.type = 'note';
+                data.value = noteMatch[1];
+                data.label = 'Nota';
+                
+                // Si hay contenido, extraerlo también
+                const contentMatch = text.match(/:\s*(.+?)(?:\n|$)/);
+                if (contentMatch && contentMatch[1].length < 100) {
+                    data.value = noteMatch[1] + ': ' + contentMatch[1];
+                }
+                return data;
+            }
+        }
+        
+        // Números/estadísticas
+        const numberMatch = text.match(/(\d+)\s+(?:nota|recordatorio|tarea|evento)/i);
+        if (numberMatch) {
+            data.type = 'count';
+            data.value = numberMatch[0];
+            data.label = 'Total';
+            return data;
+        }
+        
+        // Si no hay datos importantes, retornar null
+        return null;
+    }
+    
+    updateDataDisplay(data) {
+        /**
+         * Actualiza el display central tipo Jarvis con datos importantes
+         * Después de 3 segundos, vuelve a mostrar "Sistema Activo"
+         */
+        if (!this.dataDisplay) return;
+        
+        // Limpiar cualquier timeout anterior
+        if (this.dataDisplayTimeout) {
+            clearTimeout(this.dataDisplayTimeout);
+            this.dataDisplayTimeout = null;
+        }
+        
+        if (data && data.value) {
+            this.dataDisplay.classList.remove('empty');
+            this.dataDisplay.innerHTML = `
+                <div class="data-label">${data.label || 'Información'}</div>
+                <div class="data-value">${data.value}</div>
+            `;
+            
+            // Después de 3 segundos, volver a "Sistema Activo"
+            this.dataDisplayTimeout = setTimeout(() => {
+                this.dataDisplay.classList.add('empty');
+                this.dataDisplay.innerHTML = '<div class="data-item">Sistema Activo</div>';
+                this.dataDisplayTimeout = null;
+            }, 3000);
+        } else {
+            // Si no hay datos, mostrar "Sistema Activo" inmediatamente
+            this.dataDisplay.classList.add('empty');
+            this.dataDisplay.innerHTML = '<div class="data-item">Sistema Activo</div>';
+        }
+    }
+    
+    updateStatus(status, listening = false) {
+        /**
+         * Actualiza el indicador de estado tipo Jarvis
+         * Solo actualiza la segunda línea (status-voice), manteniendo "SISTEMA ONLINE" arriba
+         */
+        if (this.statusVoiceLine) {
+            // Convertir a mayúsculas para mantener consistencia visual
+            const statusUpper = status.toUpperCase();
+            this.statusVoiceLine.textContent = statusUpper;
+            this.statusVoiceLine.classList.toggle('active', true);
+            this.statusVoiceLine.classList.toggle('listening', listening);
         }
     }
 
@@ -838,10 +983,10 @@ class EckoChat {
                 console.log('⚠️ Usando idioma por defecto (es-ES)');
             }
             
-            // Parámetros optimizados para sonido más natural y fluido
-            // Rate: 1.1 hace que suene más natural (la velocidad humana es ligeramente más rápida)
-            utterance.rate = 1.1;  // Ligeramente más rápido para sonar más natural
-            utterance.pitch = 1.05; // Tono ligeramente más alto para menos robótico
+            // Parámetros optimizados para sonido más natural y MENOS robótico
+            // Rate más lento para sonar más natural y menos robótico
+            utterance.rate = 0.95;  // Más lento para sonar más natural y menos robótico
+            utterance.pitch = 0.98; // Tono más bajo para sonar más natural (como voz humana real)
             utterance.volume = 1.0;
             
             // Asegurar que se use la mejor voz disponible en cada frase
@@ -855,6 +1000,10 @@ class EckoChat {
             // Manejar eventos
             utterance.onstart = () => {
                 console.log(`✅ Iniciando frase ${phraseIndex + 1}/${phrases.length}`);
+                // Animar display central cuando Ecko habla
+                if (this.dataDisplay) {
+                    this.dataDisplay.classList.add('speaking');
+                }
             };
 
             utterance.onerror = (event) => {
@@ -867,6 +1016,12 @@ class EckoChat {
 
             utterance.onend = () => {
                 console.log(`✅ Frase ${phraseIndex + 1}/${phrases.length} completada`);
+                // Si es la última frase, quitar animación
+                if (phraseIndex + 1 >= phrases.length) {
+                    if (this.dataDisplay) {
+                        this.dataDisplay.classList.remove('speaking');
+                    }
+                }
                 // Pausa más larga entre frases para sonar más natural (como pausa de respiración)
                 setTimeout(() => {
                     speakPhrases(phraseIndex + 1);

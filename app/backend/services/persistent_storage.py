@@ -101,6 +101,19 @@ class PersistentStorage:
             )
         """)
         
+        # Tabla de notas (sistema de notas tipo Jarvis)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (session_id) REFERENCES user_profiles(session_id)
+            )
+        """)
+        
         # Índices para mejor performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_session ON reminders(session_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_active ON reminders(active)")
@@ -108,6 +121,8 @@ class PersistentStorage:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_read ON pending_notifications(read)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_session ON notes(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_title ON notes(title)")
         
         self.conn.commit()
         print("[OK] Tablas de base de datos creadas/verificadas")
@@ -369,6 +384,84 @@ class PersistentStorage:
         cursor = self.conn.cursor()
         cursor.execute("SELECT 1 FROM sessions WHERE session_id = ?", (session_id,))
         return cursor.fetchone() is not None
+    
+    # ========== NOTAS ==========
+    
+    def save_note(self, note_data: Dict):
+        """Guardar o actualizar una nota"""
+        cursor = self.conn.cursor()
+        now = datetime.now().isoformat()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO notes 
+            (id, session_id, title, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 
+                    COALESCE((SELECT created_at FROM notes WHERE id = ?), ?),
+                    ?)
+        """, (
+            note_data["id"],
+            note_data["session_id"],
+            note_data["title"],
+            note_data["content"],
+            note_data["id"],
+            now,
+            now
+        ))
+        
+        self.conn.commit()
+    
+    def get_note(self, session_id: str, note_id: str) -> Optional[Dict]:
+        """Obtener una nota específica"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM notes 
+            WHERE id = ? AND session_id = ?
+        """, (note_id, session_id))
+        row = cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        return dict(row)
+    
+    def get_note_by_title(self, session_id: str, title: str) -> Optional[Dict]:
+        """Obtener una nota por título (case-insensitive)"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM notes 
+            WHERE session_id = ? AND LOWER(title) = LOWER(?)
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """, (session_id, title))
+        row = cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        return dict(row)
+    
+    def get_all_notes(self, session_id: str) -> List[Dict]:
+        """Obtener todas las notas de una sesión"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM notes 
+            WHERE session_id = ?
+            ORDER BY updated_at DESC
+        """, (session_id,))
+        
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    
+    def delete_note(self, session_id: str, note_id: str) -> bool:
+        """Eliminar una nota"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            DELETE FROM notes 
+            WHERE id = ? AND session_id = ?
+        """, (note_id, session_id))
+        
+        self.conn.commit()
+        return cursor.rowcount > 0
     
     def close(self):
         """Cerrar conexión a la base de datos"""

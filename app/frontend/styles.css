@@ -585,10 +585,30 @@ footer {
         font-size: 16px; /* Previene zoom en iOS */
     }
 
-    .voice-button,
+    .voice-button {
+        width: 48px;
+        height: 48px;
+    }
+    
     .send-button {
-        width: 32px;
-        height: 32px;
+        width: 48px;
+        height: 48px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 48px;
+    }
+    
+    .send-button span {
+        display: none; /* Ocultar texto en móvil */
+    }
+    
+    .send-button::after {
+        content: '→';
+        font-size: 1.5rem;
+        font-weight: bold;
+        line-height: 1;
     }
 
     .voice-icon {

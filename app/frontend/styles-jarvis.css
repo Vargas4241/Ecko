@@ -1,0 +1,486 @@
+/* ============================================
+   ECKO - DISEÑO JARVIS (IRON MAN STYLE)
+   Minimalista, Voice-First, Futurista
+   Negro y Verde
+   ============================================ */
+
+:root {
+    /* Colores Jarvis - Negro y Verde */
+    --jarvis-bg: #000000;
+    --jarvis-surface: #0a0a0a;
+    --jarvis-surface-elevated: #1a1a1a;
+    --jarvis-primary: #00ff41;  /* Verde brillante tipo terminal */
+    --jarvis-primary-dim: #00cc33;
+    --jarvis-primary-glow: rgba(0, 255, 65, 0.3);
+    --jarvis-text-primary: #e5e5e5;
+    --jarvis-text-secondary: #888888;
+    --jarvis-border: rgba(0, 255, 65, 0.2);
+    --jarvis-glow: 0 0 20px rgba(0, 255, 65, 0.5);
+    
+    /* Animaciones */
+    --pulse-glow: 0 0 30px rgba(0, 255, 65, 0.8);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    background: var(--jarvis-bg);
+    color: var(--jarvis-text-primary);
+    min-height: 100vh;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Efecto de grid/scanlines tipo HUD */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+        linear-gradient(rgba(0, 255, 65, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 255, 65, 0.03) 1px, transparent 1px);
+    background-size: 50px 50px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Container principal - Centrado tipo HUD */
+.container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+}
+
+/* Header minimalista - Solo logo/título pequeño arriba */
+header {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    text-align: center;
+}
+
+header h1 {
+    font-size: 1.5rem;
+    font-weight: 300;
+    letter-spacing: 8px;
+    color: var(--jarvis-primary);
+    text-shadow: var(--jarvis-glow);
+    margin: 0;
+    text-transform: uppercase;
+}
+
+header .logo {
+    width: 32px;
+    height: 32px;
+    filter: drop-shadow(var(--jarvis-glow));
+    margin-bottom: 10px;
+}
+
+/* Toggle de tema - discreto */
+.theme-toggle {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--jarvis-border);
+    background: transparent;
+    color: var(--jarvis-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    z-index: 100;
+}
+
+.theme-toggle:hover {
+    border-color: var(--jarvis-primary);
+    box-shadow: 0 0 10px var(--jarvis-primary-glow);
+}
+
+/* Contenedor de datos esenciales - Centro de pantalla tipo HUD */
+.data-display {
+    max-width: 600px;
+    width: 90%;
+    background: var(--jarvis-surface);
+    border: 1px solid var(--jarvis-border);
+    border-radius: 8px;
+    padding: 30px;
+    box-shadow: var(--jarvis-glow);
+    margin-bottom: 40px;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.data-display.empty {
+    opacity: 0.3;
+}
+
+.data-display .data-item {
+    font-size: 1.2rem;
+    color: var(--jarvis-primary);
+    text-shadow: 0 0 10px var(--jarvis-primary-glow);
+    margin: 10px 0;
+    text-align: center;
+    font-weight: 300;
+}
+
+.data-display .data-label {
+    font-size: 0.9rem;
+    color: var(--jarvis-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 5px;
+}
+
+.data-display .data-value {
+    font-size: 1.5rem;
+    color: var(--jarvis-primary);
+    font-weight: 500;
+}
+
+/* Animación cuando Ecko está hablando */
+.data-display.speaking {
+    /* Animación más rápida y marcada para que acompañe mejor el ritmo de la voz */
+    animation: pulse-glow 0.7s infinite;
+    box-shadow: 0 0 22px var(--jarvis-primary-glow);
+}
+
+@keyframes pulse-glow {
+    0% {
+        box-shadow: 0 0 10px var(--jarvis-primary-glow);
+        transform: scale(1);
+    }
+    25% {
+        box-shadow: 0 0 26px var(--jarvis-primary-glow);
+        transform: scale(1.03);
+    }
+    50% {
+        box-shadow: 0 0 34px var(--jarvis-primary-glow);
+        transform: scale(1.05);
+    }
+    75% {
+        box-shadow: 0 0 26px var(--jarvis-primary-glow);
+        transform: scale(1.03);
+    }
+    100% {
+        box-shadow: 0 0 10px var(--jarvis-primary-glow);
+        transform: scale(1);
+    }
+}
+
+/* Indicador de estado - Abajo centro */
+.status-indicator {
+    position: fixed;
+    bottom: 120px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    z-index: 10;
+}
+
+.status-line {
+    font-size: 0.9rem;
+    color: var(--jarvis-text-secondary);
+    margin: 5px 0;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+}
+
+.status-line.active {
+    color: var(--jarvis-primary);
+    text-shadow: 0 0 10px var(--jarvis-primary-glow);
+}
+
+.status-line.listening {
+    animation: pulse-text 1.5s infinite;
+}
+
+@keyframes pulse-text {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Input container - Abajo, discreto, minimalista */
+.chat-input-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--jarvis-surface);
+    border-top: 1px solid var(--jarvis-border);
+    padding: 20px;
+    z-index: 50;
+}
+
+.chat-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: center;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.message-input {
+    flex: 1;
+    max-width: 500px;
+    padding: 12px 20px;
+    background: var(--jarvis-surface-elevated);
+    border: 1px solid var(--jarvis-border);
+    border-radius: 4px;
+    color: var(--jarvis-text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    outline: none;
+    transition: all 0.3s ease;
+}
+
+.message-input:focus {
+    border-color: var(--jarvis-primary);
+    box-shadow: 0 0 15px var(--jarvis-primary-glow);
+}
+
+.message-input::placeholder {
+    color: var(--jarvis-text-secondary);
+    opacity: 0.5;
+}
+
+/* Botón de voz - Principal, grande, destacado */
+.voice-button {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    border: 2px solid var(--jarvis-primary);
+    background: var(--jarvis-surface);
+    color: var(--jarvis-primary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    box-shadow: var(--jarvis-glow);
+    position: relative;
+}
+
+.voice-button:hover {
+    background: var(--jarvis-surface-elevated);
+    transform: scale(1.05);
+    box-shadow: var(--pulse-glow);
+}
+
+.voice-button.listening {
+    background: var(--jarvis-primary);
+    color: var(--jarvis-bg);
+    animation: pulse-ring 1.5s infinite;
+}
+
+.voice-button.listening::before {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 2px solid var(--jarvis-primary);
+    animation: ripple 1.5s infinite;
+}
+
+@keyframes pulse-ring {
+    0%, 100% { box-shadow: 0 0 0 0 var(--jarvis-primary-glow); }
+    50% { box-shadow: 0 0 0 15px rgba(0, 255, 65, 0); }
+}
+
+@keyframes ripple {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(2);
+        opacity: 0;
+    }
+}
+
+.voice-icon {
+    width: 30px;
+    height: 30px;
+}
+
+/* Botón enviar - discreto */
+.send-button {
+    width: 50px;
+    height: 50px;
+    padding: 0;
+    background: var(--jarvis-surface-elevated);
+    border: 1px solid var(--jarvis-border);
+    color: var(--jarvis-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    font-size: 1.2rem;
+}
+
+.send-button:hover {
+    border-color: var(--jarvis-primary);
+    box-shadow: 0 0 10px var(--jarvis-primary-glow);
+}
+
+.send-button span {
+    display: none;
+}
+
+.send-button::after {
+    content: '→';
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+/* Mensajes minimizados - Solo se muestran datos importantes */
+.message {
+    display: none; /* Por defecto ocultos - voice-first */
+}
+
+.message.data-only {
+    display: block;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--jarvis-surface);
+    border: 1px solid var(--jarvis-border);
+    padding: 20px 40px;
+    border-radius: 8px;
+    box-shadow: var(--jarvis-glow);
+    max-width: 80%;
+    text-align: center;
+    animation: data-appear 0.5s ease;
+}
+
+@keyframes data-appear {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -40%);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%);
+    }
+}
+
+.message.data-only .data-content {
+    color: var(--jarvis-primary);
+    font-size: 1.3rem;
+    font-weight: 400;
+    text-shadow: 0 0 10px var(--jarvis-primary-glow);
+}
+
+/* Notificaciones - tipo HUD */
+.notifications-container {
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 300px;
+    pointer-events: none;
+}
+
+.notification {
+    background: var(--jarvis-surface);
+    border: 1px solid var(--jarvis-border);
+    border-left: 3px solid var(--jarvis-primary);
+    padding: 15px 20px;
+    border-radius: 4px;
+    color: var(--jarvis-text-primary);
+    font-size: 0.9rem;
+    box-shadow: var(--jarvis-glow);
+    animation: notification-slide 0.3s ease;
+    pointer-events: auto;
+}
+
+@keyframes notification-slide {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Voice status - ELIMINADO (ahora solo se usa status-indicator) */
+.voice-status {
+    display: none !important;
+}
+
+/* Footer - Oculto o minimalista */
+footer {
+    display: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .data-display {
+        width: 95%;
+        padding: 20px;
+    }
+    
+    .voice-button {
+        width: 60px;
+        height: 60px;
+    }
+    
+    .chat-form {
+        flex-wrap: wrap;
+    }
+    
+    .message-input {
+        max-width: 100%;
+        order: 1;
+    }
+    
+    .send-button {
+        order: 2;
+    }
+    
+    .voice-button {
+        order: 3;
+    }
+}
+
+/* Modo claro (opcional, pero manteniendo estilo futurista) */
+[data-theme="light"] {
+    --jarvis-bg: #f0fdf4;
+    --jarvis-surface: #ffffff;
+    --jarvis-surface-elevated: #f0fdf4;
+    --jarvis-text-primary: #1f2937;
+    --jarvis-text-secondary: #6b7280;
+    --jarvis-border: rgba(16, 185, 129, 0.3);
+}
+

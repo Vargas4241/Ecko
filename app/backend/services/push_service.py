@@ -8,10 +8,30 @@ import json
 import os
 from typing import Dict, List, Optional
 import base64
-from pywebpush import webpush, WebPushException
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.backends import default_backend
+
+# Verificar disponibilidad de librerías opcionales
+try:
+    from pywebpush import webpush, WebPushException
+    PYWEBPUSH_AVAILABLE = True
+except ImportError:
+    PYWEBPUSH_AVAILABLE = False
+    print("[WARN] pywebpush no está instalado. El servicio de Push estará desactivado.")
+
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.backends import default_backend
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
+    print("[WARN] cryptography no está instalado. La generación de claves VAPID estará limitada.")
+
+# Instancia global
+_push_service_instance: Optional["PushService"] = None
+
+def get_push_service() -> Optional["PushService"]:
+    """Retorna la instancia singleton de PushService."""
+    return _push_service_instance
 
 class PushService:
     """
@@ -57,8 +77,11 @@ class PushService:
             "sub": f"mailto:{self.vapid_email}"
         }
         
-        print(f"[OK] PushService inicializado - Sistema de notificaciones push activo")
-        print(f"[INFO] VAPID Email: {self.vapid_email}")
+        if PYWEBPUSH_AVAILABLE and self.vapid_private_key:
+            print(f"[OK] PushService inicializado - Sistema de notificaciones push activo")
+            print(f"[INFO] VAPID Email: {self.vapid_email}")
+        else:
+            print("[WARN] PushService inicializado pero sin funcionalidad completa (falta pywebpush o claves VAPID)")
         
         # Guardar instancia global
         global _push_service_instance
@@ -67,37 +90,38 @@ class PushService:
     def _generate_vapid_keys(self):
         """Generar claves VAPID automáticamente (para desarrollo)"""
         try:
-            # Intentar usar py_vapid para generar claves
-            try:
-                from py_vapid import Vapid01
-                vapid = Vapid01()
-                vapid.generate_keys()
-                
-                # pywebpush espera las claves en formato PEM
-                from cryptography.hazmat.primitives import serialization
-                self.vapid_private_key = vapid.private_key.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption()
-                ).decode('utf-8')
-                
-                # Obtener clave pública en formato base64 URL-safe
-                public_key_bytes = vapid.public_key.public_bytes(
-                    encoding=serialization.Encoding.X962,
-                    format=serialization.PublicFormat.UncompressedPoint
-                )
-                self.vapid_public_key_b64 = base64.urlsafe_b64encode(public_key_bytes).decode('utf-8').rstrip('=')
-                
-                print("[INFO] Claves VAPID generadas automáticamente")
-                print("[INFO] Para producción, genera claves con: python -m py_vapid --gen")
-            except ImportError:
-                # Fallback: usar pywebpush para generar claves si py_vapid no está
-                print("[INFO] Generando claves VAPID con pywebpush...")
-                # pywebpush puede generar claves, pero es mejor usar py_vapid
-                # Por ahora, dejar None y el usuario debe configurar manualmente
-                print("[WARN] Instala py-vapid para generar claves automáticamente: pip install py-vapid")
+            if not CRYPTOGRAPHY_AVAILABLE:
+                print("[WARN] cryptography no disponible, no se pueden generar claves VAPID")
                 self.vapid_private_key = None
                 self.vapid_public_key_b64 = None
+                return
+            
+            # Usar cryptography directamente (más confiable)
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.backends import default_backend
+            
+            # Generar clave privada ECDSA P-256 (SECP256R1)
+            private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+            
+            # Convertir a PEM para pywebpush
+            self.vapid_private_key = private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode('utf-8')
+            
+            # Obtener clave pública y convertir a base64 URL-safe (formato VAPID)
+            public_key = private_key.public_key()
+            public_key_bytes = public_key.public_bytes(
+                encoding=serialization.Encoding.X962,
+                format=serialization.PublicFormat.UncompressedPoint
+            )
+            # VAPID usa base64 URL-safe sin padding
+            self.vapid_public_key_b64 = base64.urlsafe_b64encode(public_key_bytes).decode('utf-8').rstrip('=')
+            
+            print("[INFO] Claves VAPID generadas automáticamente con cryptography")
+            print("[INFO] Para producción, genera claves con: python -m py_vapid --gen")
+            
         except Exception as e:
             print(f"[ERROR] Error generando claves VAPID: {e}")
             import traceback

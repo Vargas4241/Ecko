@@ -33,6 +33,20 @@ except ImportError:
     print("[WARN] UserProfileService no disponible")
 
 try:
+    from services.notes_service import NotesService
+    NOTES_SERVICE_AVAILABLE = True
+except ImportError:
+    NOTES_SERVICE_AVAILABLE = False
+    print("[WARN] NotesService no disponible")
+
+try:
+    from services.onboarding_service import OnboardingService
+    ONBOARDING_SERVICE_AVAILABLE = True
+except ImportError:
+    ONBOARDING_SERVICE_AVAILABLE = False
+    print("[WARN] OnboardingService no disponible")
+
+try:
     from services.push_service import PushService
     PUSH_SERVICE_AVAILABLE = True
 except ImportError:
@@ -50,11 +64,13 @@ app = FastAPI(
 reminder_service = None
 user_profile_service = None
 push_service = None
+notes_service = None
+onboarding_service = None
 
 @app.on_event("startup")
 async def startup_event():
     """Inicializar servicios al iniciar la aplicación"""
-    global reminder_service, user_profile_service, push_service
+    global reminder_service, user_profile_service, push_service, notes_service, onboarding_service
     
     # Inicializar servicio de push notifications
     if PUSH_SERVICE_AVAILABLE:
@@ -79,17 +95,28 @@ async def startup_event():
             print(f"[WARN] Error inicializando UserProfileService: {e}")
             user_profile_service = None
     
+    # Inicializar servicio de notas
+    if NOTES_SERVICE_AVAILABLE:
+        try:
+            notes_service = NotesService()
+            print("[OK] NotesService inicializado")
+        except Exception as e:
+            print(f"[WARN] Error inicializando NotesService: {e}")
+            notes_service = None
+    
     # Inicializar servicio de recordatorios
     if REMINDER_SERVICE_AVAILABLE:
         try:
             reminder_service = ReminderService()
             # Pasar el servicio de recordatorios al router
             chat_router.reminder_service = reminder_service
-            # Actualizar chat_service con ambos servicios
+            # Actualizar chat_service con todos los servicios
             from services.chat_service import ChatService
             chat_router.chat_service = ChatService(
                 reminder_service=reminder_service,
-                user_profile_service=user_profile_service
+                user_profile_service=user_profile_service,
+                notes_service=notes_service,
+                onboarding_service=onboarding_service
             )
             print("[OK] Servicios inicializados correctamente")
         except Exception as e:
@@ -98,11 +125,18 @@ async def startup_event():
             traceback.print_exc()
             # Continuar sin recordatorios si hay error
             from services.chat_service import ChatService
-            chat_router.chat_service = ChatService(user_profile_service=user_profile_service)
+            chat_router.chat_service = ChatService(
+                user_profile_service=user_profile_service,
+                notes_service=notes_service,
+                onboarding_service=onboarding_service
+            )
     else:
-        # Inicializar solo ChatService con perfil de usuario
+        # Inicializar solo ChatService con perfil de usuario y notas
         from services.chat_service import ChatService
-        chat_router.chat_service = ChatService(user_profile_service=user_profile_service)
+        chat_router.chat_service = ChatService(
+            user_profile_service=user_profile_service,
+            notes_service=notes_service
+        )
 
 @app.on_event("shutdown")
 async def shutdown_event():

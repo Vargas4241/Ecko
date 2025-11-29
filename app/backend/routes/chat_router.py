@@ -10,6 +10,16 @@ from datetime import datetime
 from services.chat_service import ChatService
 from services.memory_service import MemoryService
 
+# Importar servicio de exportación
+try:
+    from services.chat_export_service import ChatExportService
+    export_service = ChatExportService()
+    EXPORT_AVAILABLE = True
+except ImportError:
+    ChatExportService = None
+    export_service = None
+    EXPORT_AVAILABLE = False
+
 router = APIRouter()
 
 # Instancias de servicios (singleton para desarrollo simple)
@@ -66,6 +76,18 @@ async def chat_endpoint(message: ChatMessage):
         
         # Guardar respuesta del asistente
         memory_service.add_message(session_id, "assistant", response)
+        
+        # Exportar conversación al archivo del día (en background, no bloquear respuesta)
+        if EXPORT_AVAILABLE and export_service:
+            try:
+                # Obtener historial completo actualizado
+                current_history = memory_service.get_session_history(session_id)
+                # Exportar (últimos 2 mensajes: user + assistant)
+                if len(current_history) >= 2:
+                    export_service.export_conversation(session_id, current_history[-2:])
+            except Exception as e:
+                # No fallar si la exportación falla
+                print(f"[WARN] Error exportando conversación: {e}")
         
         return ChatResponse(
             response=response,
