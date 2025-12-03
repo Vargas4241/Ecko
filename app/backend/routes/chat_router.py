@@ -27,6 +27,7 @@ router = APIRouter()
 memory_service = MemoryService()
 reminder_service = None  # Se inicializará en startup event de main.py
 chat_service = ChatService()  # Inicialización básica, se actualizará en startup
+summary_service = None  # Se inicializará en startup event de main.py
 
 class ChatMessage(BaseModel):
     message: str
@@ -186,4 +187,81 @@ async def delete_reminder(session_id: str, reminder_id: str):
         return {"message": "Recordatorio eliminado", "reminder_id": reminder_id}
     else:
         raise HTTPException(status_code=404, detail="Recordatorio no encontrado")
+
+# ===== Endpoints de Resúmenes =====
+
+class SummaryRequest(BaseModel):
+    period: Optional[str] = "today"  # "today", "week", "all"
+    custom_context: Optional[str] = None
+
+@router.post("/summaries/{session_id}")
+async def generate_summary(session_id: str, request: SummaryRequest):
+    """
+    Generar un resumen de la conversación
+    
+    Periodos disponibles:
+    - "today": Resumen del día de hoy
+    - "week": Resumen de la última semana
+    - "all": Resumen de toda la conversación
+    """
+    if not summary_service:
+        raise HTTPException(status_code=503, detail="Servicio de resúmenes no disponible")
+    
+    try:
+        # Obtener historial de la sesión
+        history = memory_service.get_session_history(session_id)
+        
+        if not history:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada o sin historial")
+        
+        # Generar resumen
+        summary = await summary_service.generate_summary(
+            session_id=session_id,
+            history=history,
+            period=request.period,
+            custom_context=request.custom_context
+        )
+        
+        # Obtener estadísticas
+        stats = summary_service.get_summary_stats(history, request.period)
+        
+        return {
+            "session_id": session_id,
+            "summary": summary,
+            "period": request.period,
+            "stats": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando resumen: {str(e)}")
+
+@router.get("/summaries/{session_id}/stats")
+async def get_summary_stats(session_id: str, period: str = "today"):
+    """
+    Obtener estadísticas de la conversación sin generar resumen
+    """
+    if not summary_service:
+        raise HTTPException(status_code=503, detail="Servicio de resúmenes no disponible")
+    
+    try:
+        history = memory_service.get_session_history(session_id)
+        
+        if not history:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        
+        stats = summary_service.get_summary_stats(history, period)
+        
+        return {
+            "session_id": session_id,
+            "stats": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo estadísticas: {str(e)}")
 

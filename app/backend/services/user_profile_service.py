@@ -173,6 +173,14 @@ class UserProfileService:
         info = {}
         message_lower = message.lower()
         
+        # IMPORTANTE: No extraer "ecko" o "eco" como nombre del usuario
+        # Estas son referencias al asistente, no al usuario
+        wake_words = ['ecko', 'eco']
+        if any(word in message_lower for word in wake_words):
+            # Si el mensaje contiene el nombre del asistente, no extraer nombres
+            # a menos que sea explícito ("me llamo..." después del saludo)
+            pass
+        
         # Detectar nombre
         name_patterns = [
             r'me llamo\s+(\w+)',
@@ -183,8 +191,11 @@ class UserProfileService:
         for pattern in name_patterns:
             match = re.search(pattern, message_lower)
             if match:
-                info["name"] = match.group(1).capitalize()
-                break
+                extracted_name = match.group(1).lower().strip()
+                # NO extraer si es "ecko" o "eco" (nombre del asistente)
+                if extracted_name not in wake_words:
+                    info["name"] = match.group(1).capitalize()
+                    break
         
         # Detectar cumpleaños
         birthday_patterns = [

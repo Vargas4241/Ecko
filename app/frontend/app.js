@@ -41,6 +41,14 @@ class EckoChat {
         // Timeout para el display de datos
         this.dataDisplayTimeout = null;
         
+        // Wake word detection - "Hey Ecko" / "Eco"
+        this.wakeWordEnabled = false;
+        this.wakeWordRecognition = null;
+        this.isWakeWordListening = false;
+        this.lastWakeWordTime = null;
+        this.detectedWakeWord = null;
+        this.fromWakeWord = false;
+        
         console.log('🔧 Constructor EckoChat ejecutado (Modo Jarvis)');
         this.init();
     }
@@ -53,6 +61,9 @@ class EckoChat {
         
         // Inicializar reconocimiento de voz
         this.initSpeechRecognition();
+        
+        // Inicializar wake word detection ("Hey Ecko" / "Eco")
+        this.initWakeWordDetection();
         
         // Cargar voces disponibles para TTS
         this.initTextToSpeech();
@@ -74,6 +85,13 @@ class EckoChat {
             this.startReminderPolling();
             // Registrar para push notifications
             this.initPushNotifications();
+            // Activar wake word detection después de inicializar todo
+            if (this.wakeWordRecognition && !this.wakeWordEnabled) {
+                // Esperar un poco para asegurar que todo esté listo
+                setTimeout(() => {
+                    this.enableWakeWord();
+                }, 1500);
+            }
         });
         
         // Registrar Service Worker para PWA y Push
@@ -169,6 +187,7 @@ class EckoChat {
         this.recognition.onstart = () => {
             console.log('🎤 Reconocimiento iniciado');
             this.isListening = true;
+            this.isWakeWordListening = false; // Asegurar que wake word esté detenido
             this.updateVoiceButton(true);
             // Solo usar updateStatus - muestra "ESCUCHANDO" en el status-indicator
             this.updateStatus('Escuchando', true);
@@ -204,10 +223,25 @@ class EckoChat {
             }
             
             // Guardar el mensaje pendiente (actualizar con lo más reciente)
+            // Si viene del wake word, asegurarse de filtrar el wake word del transcript
+            let messageToStore = allFinal || currentTranscript;
+            
+            // Si viene del wake word, filtrar el wake word inmediatamente
+            if (this.fromWakeWord) {
+                const wakeWordsToRemove = ['hey ecko', 'hey eco', 'hola ecko', 'hola eco', 'ecko', 'eco'];
+                for (const wakeWord of wakeWordsToRemove) {
+                    // Remover del inicio
+                    messageToStore = messageToStore.replace(new RegExp(`^${wakeWord}\\s+`, 'i'), '');
+                    // Remover del medio o final
+                    messageToStore = messageToStore.replace(new RegExp(`\\s+${wakeWord}(\\s|$)`, 'gi'), ' ');
+                }
+                messageToStore = messageToStore.trim();
+            }
+            
             if (allFinal) {
-                this.pendingVoiceMessage = allFinal;
+                this.pendingVoiceMessage = messageToStore;
             } else {
-                this.pendingVoiceMessage = currentTranscript;
+                this.pendingVoiceMessage = messageToStore;
             }
             this.voiceMessageSent = false;
             this.voiceFromAudio = true;
@@ -297,6 +331,7 @@ class EckoChat {
             }
             
             this.isListening = false;
+            this.isWakeWordListening = false;
             this.updateVoiceButton(false);
             this.updateStatus('Procesando', false);
             
@@ -307,13 +342,24 @@ class EckoChat {
                 // Esperar un poco más para asegurar que capturamos todo
                 setTimeout(() => {
                     if (this.pendingVoiceMessage && !this.voiceMessageSent) {
-                        // Solo usar updateStatus
                         this.updateStatus('Enviando...', false);
                         this.sendPendingVoiceMessage();
                     }
                 }, 500);
-            } else if (!this.voiceFromAudio && !this.pendingVoiceMessage) {
-                this.updateStatus('Listo', false);
+            }
+            
+            // Reiniciar wake word detection después de enviar
+            setTimeout(() => {
+                if (this.wakeWordEnabled && !this.isListening && !this.isWakeWordListening) {
+                    this.startWakeWordDetection();
+                }
+            }, 2000);
+            
+            // Si no hay mensaje pendiente, volver a estado normal
+            if (!this.pendingVoiceMessage && !this.voiceFromAudio) {
+                setTimeout(() => {
+                    this.updateStatus('Listo', false);
+                }, 1000);
             }
         };
     }
@@ -394,6 +440,225 @@ class EckoChat {
         }
     }
 
+    initWakeWordDetection() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        if (!SpeechRecognition) {
+            console.warn('⚠️ Wake word detection no disponible (Speech Recognition requerido)');
+            return;
+        }
+
+        // Crear reconocimiento separado para wake word
+        this.wakeWordRecognition = new SpeechRecognition();
+        this.wakeWordRecognition.lang = 'es-ES';
+        this.wakeWordRecognition.continuous = true;
+        this.wakeWordRecognition.interimResults = true;
+        this.wakeWordRecognition.maxAlternatives = 1;
+
+        // Palabras clave para activar
+        const wakeWords = ['ecko', 'eco', 'hey ecko', 'hey eco', 'hola ecko', 'hola eco'];
+        
+        this.wakeWordRecognition.onresult = (event) => {
+            let transcript = '';
+            
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                transcript += event.results[i][0].transcript.toLowerCase().trim() + ' ';
+            }
+            
+            transcript = transcript.trim();
+            
+            // Verificar si contiene alguna palabra de activación
+            const containsWakeWord = wakeWords.some(word => 
+                transcript.includes(word.toLowerCase())
+            );
+            
+            if (containsWakeWord && !this.isListening && !this.isWakeWordListening) {
+                console.log('🔊 Wake word detectado:', transcript);
+                this.lastWakeWordTime = Date.now();
+                
+                // Guardar el wake word detectado para filtrarlo después
+                this.detectedWakeWord = transcript;
+                
+                // Detener wake word recognition temporalmente
+                try {
+                    this.wakeWordRecognition.stop();
+                } catch (e) {
+                    // Ya estaba detenido
+                }
+                
+                // Guardar el transcript completo del wake word para incluirlo en el mensaje
+                // Si el transcript completo es "hola ecko" o similar, enviar directamente
+                const wakeWordPhrases = ['hola ecko', 'hola eco', 'hey ecko', 'hey eco'];
+                const isCompleteGreeting = wakeWordPhrases.some(phrase => transcript.includes(phrase));
+                
+                if (isCompleteGreeting && transcript.trim().length < 20) {
+                    // Es solo un saludo, enviarlo directamente sin esperar más reconocimiento
+                    console.log('✅ Saludo completo detectado, enviando directamente:', transcript);
+                    this.wakeWordRecognition.stop();
+                    setTimeout(() => {
+                        // Filtrar solo el wake word, mantener el saludo
+                        let message = transcript.replace(/hey\s*(ecko|eco)/gi, '').trim();
+                        if (!message) {
+                            message = transcript.replace(/(ecko|eco)/gi, 'hola').trim();
+                        }
+                        if (message) {
+                            this.sendMessageFromVoice(message);
+                        }
+                        // Reiniciar wake word después
+                        setTimeout(() => {
+                            if (this.wakeWordEnabled && !this.isListening) {
+                                this.startWakeWordDetection();
+                            }
+                        }, 2000);
+                    }, 100);
+                } else {
+                    // Hay más contenido después del wake word, activar reconocimiento principal
+                    // NO guardar el transcript del wake word - empezar desde cero
+                    setTimeout(() => {
+                        if (this.recognition && !this.isListening) {
+                            console.log('🎤 Activando reconocimiento principal después de wake word');
+                            this.voiceFromAudio = true; // Marcar que viene de wake word
+                            // NO guardar el transcript del wake word - empezar limpio
+                            this.pendingVoiceMessage = null;
+                            this.voiceMessageSent = false;
+                            this.isWakeWordListening = false; // Asegurar que esté detenido
+                            this.fromWakeWord = true; // Marcar que viene de wake word para filtrar después
+                            
+                            // Limpiar input
+                            if (this.messageInput) {
+                                this.messageInput.value = '';
+                            }
+                            
+                            try {
+                                this.recognition.start();
+                                // Mostrar feedback visual
+                                this.updateStatus('Escuchando', true);
+                                // Opcional: reproducir sonido de confirmación
+                                this.playActivationSound();
+                            } catch (error) {
+                                console.error('❌ Error activando reconocimiento:', error);
+                                // Reiniciar wake word detection si falla
+                                setTimeout(() => {
+                                    if (this.wakeWordEnabled && !this.isListening) {
+                                        this.startWakeWordDetection();
+                                    }
+                                }, 1000);
+                            }
+                        }
+                    }, 300);
+                }
+            }
+        };
+
+        this.wakeWordRecognition.onerror = (event) => {
+            // Ignorar errores comunes (como 'no-speech')
+            if (event.error === 'no-speech' || event.error === 'aborted') {
+                // Reiniciar automáticamente
+                setTimeout(() => {
+                    if (!this.isListening && !this.isWakeWordListening) {
+                        this.startWakeWordDetection();
+                    }
+                }, 1000);
+            } else {
+                console.error('❌ Error en wake word detection:', event.error);
+            }
+        };
+
+        this.wakeWordRecognition.onend = () => {
+            this.isWakeWordListening = false;
+            // Si no estamos escuchando activamente, reiniciar wake word detection
+            if (!this.isListening && this.wakeWordEnabled) {
+                setTimeout(() => {
+                    if (!this.isListening && !this.isWakeWordListening && this.wakeWordEnabled) {
+                        this.startWakeWordDetection();
+                    }
+                }, 500);
+            }
+        };
+
+        // NO habilitar wake word automáticamente - se habilitará después de inicializar todo
+        // this.enableWakeWord(); // Comentado - se habilitará en init()
+    }
+
+    enableWakeWord() {
+        if (!this.wakeWordRecognition) {
+            console.warn('⚠️ Wake word recognition no está inicializado');
+            return;
+        }
+
+        if (this.wakeWordEnabled) {
+            return; // Ya está habilitado
+        }
+
+        this.wakeWordEnabled = true;
+        this.startWakeWordDetection();
+        console.log('✅ Wake word detection activado - Di "Hey Ecko" o "Eco" para activar');
+        this.updateStatus('Wake word activado', false);
+        setTimeout(() => this.updateStatus('Listo', false), 2000);
+    }
+
+    disableWakeWord() {
+        this.wakeWordEnabled = false;
+        if (this.isWakeWordListening) {
+            try {
+                this.wakeWordRecognition.stop();
+            } catch (e) {
+                // Ya estaba detenido
+            }
+        }
+        console.log('🔇 Wake word detection desactivado');
+    }
+
+    startWakeWordDetection() {
+        if (!this.wakeWordEnabled || !this.wakeWordRecognition) {
+            return;
+        }
+
+        if (this.isListening) {
+            // Si ya estamos escuchando activamente, no iniciar wake word
+            return;
+        }
+
+        try {
+            this.isWakeWordListening = true;
+            this.wakeWordRecognition.start();
+            console.log('👂 Escuchando wake word...');
+        } catch (error) {
+            // Si ya está iniciado, ignorar el error
+            if (!error.message || !error.message.includes('already started')) {
+                console.error('❌ Error iniciando wake word detection:', error);
+                // Reintentar después de un delay
+                setTimeout(() => {
+                    this.startWakeWordDetection();
+                }, 2000);
+            }
+        }
+    }
+
+    playActivationSound() {
+        // Reproducir un sonido breve de confirmación (opcional)
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = 800; // Frecuencia agradable
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.1);
+        } catch (e) {
+            // Si no se puede reproducir sonido, continuar sin él
+            console.log('ℹ️ No se pudo reproducir sonido de activación');
+        }
+    }
+
     toggleVoiceRecognition(e) {
         if (e) {
             e.preventDefault();
@@ -428,6 +693,18 @@ class EckoChat {
             this.recognition.stop();
         } else {
             try {
+                // IMPORTANTE: Detener wake word antes de iniciar reconocimiento normal
+                // En muchos navegadores solo se puede usar una instancia a la vez
+                if (this.isWakeWordListening && this.wakeWordRecognition) {
+                    console.log('🛑 Deteniendo wake word detection...');
+                    try {
+                        this.wakeWordRecognition.stop();
+                        this.isWakeWordListening = false;
+                    } catch (e) {
+                        console.log('⚠️ Error deteniendo wake word:', e);
+                    }
+                }
+                
                 // Resetear estado de voz
                 this.voiceFromAudio = false;
                 this.pendingVoiceMessage = null;
@@ -437,12 +714,17 @@ class EckoChat {
                     clearTimeout(this.silenceTimeout);
                     this.silenceTimeout = null;
                 }
+                
                 console.log('▶️ Iniciando reconocimiento...');
                 this.recognition.start();
             } catch (error) {
                 console.error('❌ Error:', error);
                 if (!error.message || !error.message.includes('already started')) {
                     alert('Error al iniciar el reconocimiento. Intenta de nuevo.');
+                    // Reiniciar wake word si falla
+                    if (this.wakeWordEnabled && !this.isListening) {
+                        setTimeout(() => this.startWakeWordDetection(), 1000);
+                    }
                 }
             }
         }
@@ -485,7 +767,50 @@ class EckoChat {
             return;
         }
         
-        const message = this.pendingVoiceMessage;
+        let message = this.pendingVoiceMessage;
+        
+        // Si viene del wake word, filtrar el wake word del mensaje
+        if (this.fromWakeWord) {
+            console.log('🔧 Filtrando wake word del mensaje:', message);
+            // Filtrar palabras de wake word del mensaje (al inicio, medio o final)
+            const wakeWordsToRemove = ['hey ecko', 'hey eco', 'hola ecko', 'hola eco'];
+            let cleanedMessage = message;
+            
+            // Primero remover frases completas de wake word
+            for (const wakeWord of wakeWordsToRemove) {
+                cleanedMessage = cleanedMessage.replace(new RegExp(`^${wakeWord}\\s*`, 'i'), '');
+                cleanedMessage = cleanedMessage.replace(new RegExp(`\\s*${wakeWord}\\s*`, 'i'), ' ');
+                cleanedMessage = cleanedMessage.replace(new RegExp(`\\s*${wakeWord}$`, 'i'), '');
+            }
+            
+            // Luego remover palabras individuales "ecko" o "eco" al inicio del mensaje
+            cleanedMessage = cleanedMessage.replace(/^(ecko|eco)\s+/i, '');
+            cleanedMessage = cleanedMessage.replace(/\s+(ecko|eco)\s+/gi, ' ');
+            cleanedMessage = cleanedMessage.replace(/\s+(ecko|eco)$/i, '');
+            
+            message = cleanedMessage.trim();
+            
+            console.log('🔧 Mensaje filtrado (removido wake word):', message);
+            this.detectedWakeWord = null;
+            this.fromWakeWord = false;
+        }
+        
+        // Si el mensaje está vacío después de filtrar, no enviar
+        if (!message || message.trim().length === 0) {
+            console.log('⚠️ Mensaje vacío después de filtrar wake word, no se envía');
+            this.voiceMessageSent = false;
+            this.pendingVoiceMessage = null;
+            this.updateStatus('No se detectó mensaje', false);
+            setTimeout(() => {
+                this.updateStatus('Listo', false);
+                // Reiniciar wake word
+                if (this.wakeWordEnabled && !this.isListening) {
+                    setTimeout(() => this.startWakeWordDetection(), 1000);
+                }
+            }, 2000);
+            return;
+        }
+        
         this.voiceMessageSent = true;
         this.pendingVoiceMessage = null;
         
@@ -500,12 +825,22 @@ class EckoChat {
             return;
         }
 
-        // Asegurar que el reconocimiento esté detenido
+            // Asegurar que el reconocimiento esté detenido
         if (this.isListening && this.recognition) {
             try {
                 this.recognition.stop();
             } catch (e) {
                 // Ya estaba detenido, no importa
+            }
+        }
+        
+        // Detener wake word detection temporalmente
+        if (this.isWakeWordListening && this.wakeWordRecognition) {
+            try {
+                this.wakeWordRecognition.stop();
+                this.isWakeWordListening = false;
+            } catch (e) {
+                // Ya estaba detenido
             }
         }
 
@@ -527,10 +862,18 @@ class EckoChat {
             // SIEMPRE hablar la respuesta cuando viene de voz (tipo Jarvis)
             // En móviles, TTS debe ejecutarse lo más rápido posible después de la interacción
             console.log('🎤 Mensaje de voz enviado, hablando respuesta inmediatamente...');
-            // Forzar TTS inmediatamente (iOS Safari requiere interacción del usuario)
-            setTimeout(() => {
+            // En móviles, especialmente iOS, TTS debe ejecutarse inmediatamente después de la interacción
+            // Usar requestAnimationFrame para asegurar que se ejecute en el siguiente frame
+            requestAnimationFrame(() => {
                 this.speakResponse(response.response);
-            }, 100); // Pequeño delay para asegurar que el navegador procese la respuesta
+            });
+            
+            // Reiniciar wake word detection después de procesar respuesta
+            setTimeout(() => {
+                if (this.wakeWordEnabled && !this.isListening) {
+                    this.startWakeWordDetection();
+                }
+            }, 3000); // Esperar 3 segundos después de la respuesta
             
             if (response.session_id) {
                 this.sessionId = response.session_id;
@@ -856,8 +1199,33 @@ class EckoChat {
             return;
         }
 
-        // Cancelar cualquier síntesis anterior
-        window.speechSynthesis.cancel();
+        // En móviles, especialmente iOS, el TTS debe ejecutarse en el contexto de la interacción
+        // Usar requestAnimationFrame para asegurar que se ejecute inmediatamente
+        const speakNow = () => {
+            try {
+                // Cancelar cualquier síntesis anterior
+                window.speechSynthesis.cancel();
+                // Ejecutar inmediatamente en el siguiente frame
+                requestAnimationFrame(() => {
+                    this._doSpeak(text);
+                });
+            } catch (e) {
+                console.error('❌ Error cancelando síntesis anterior:', e);
+                // Si falla, intentar de todas formas
+                this._doSpeak(text);
+            }
+        };
+        
+        // Si viene de voz (interacción del usuario), ejecutar inmediatamente
+        if (this.voiceFromAudio) {
+            speakNow();
+        } else {
+            // Si viene de otra fuente, pequeño delay para móviles
+            setTimeout(speakNow, 50);
+        }
+    }
+
+    _doSpeak(text) {
 
         // Limpiar y mejorar el texto para mejor pronunciación
         let cleanText = text

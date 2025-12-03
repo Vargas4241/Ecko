@@ -54,7 +54,7 @@ class ChatService:
     Ahora soporta IA usando Groq API (gratuita)
     """
     
-    def __init__(self, reminder_service=None, user_profile_service=None, notes_service=None, onboarding_service=None):
+    def __init__(self, reminder_service=None, user_profile_service=None, notes_service=None, onboarding_service=None, summary_service=None):
         self.commands = {
             "hora": self._get_time,
             "fecha": self._get_date,
@@ -62,6 +62,7 @@ class ChatService:
             "recordatorios": self._list_reminders,
             "mis recordatorios": self._list_reminders,
         }
+        self.summary_service = summary_service
         # Configurar API de IA (soporta Groq, Anthropic Claude, OpenAI, Google Gemini)
         self.use_ai = USE_AI
         self.groq_api_key = GROQ_API_KEY
@@ -131,14 +132,16 @@ class ChatService:
         if self.use_ai:
             if self.ai_provider == "gemini" and self.gemini_api_key:
                 print("[OK] IA activada - Usando Google Gemini API (recomendado, gratis)")
-                # El SDK de Google Gemini usa "gemini-1.5-flash" o "gemini-1.5-pro" por defecto
-                self.ai_model = "gemini-1.5-flash"  # Modelo rápido y gratuito
+                # El SDK de Google Gemini - usar modelo estable y disponible
+                # Usar modelo Gemini estable - sin prefijo "models/" 
+                # El SDK de google-generativeai usa nombres simples como "gemini-pro"
+                self.ai_model = "gemini-pro"  # Modelo estable
             elif self.ai_provider == "anthropic" and self.anthropic_api_key:
                 print("[OK] IA activada - Usando Anthropic Claude API (Cursor Premium)")
                 self.ai_model = "claude-3-5-sonnet-20241022"  # Modelo más potente de Claude
             elif self.ai_provider == "openai" and self.openai_api_key:
-                print("[OK] IA activada - Usando OpenAI GPT API")
-                self.ai_model = "gpt-4"
+                print("[OK] IA activada - Usando OpenAI GPT API (gpt-4o-mini - recomendado)")
+                self.ai_model = "gpt-4o-mini"  # Modelo económico y potente
             elif self.groq_api_key:
                 print("[OK] IA activada - Usando Groq API (gratis)")
             else:
@@ -151,7 +154,24 @@ class ChatService:
         """
         Procesa el mensaje del usuario y genera una respuesta
         """
+        # CRÍTICO: Filtrar wake word "eco" o "ecko" al INICIO antes de cualquier procesamiento
+        # Esto evita que se confunda con el nombre del usuario
+        original_message = user_message
         message_lower = user_message.lower().strip()
+        
+        # Filtrar "eco" o "ecko" al inicio del mensaje (viene del wake word)
+        # Patrón: "eco algo" o "ecko algo" -> "algo"
+        if message_lower.startswith("eco ") or message_lower.startswith("ecko "):
+            user_message = re.sub(r'^(eco|ecko)\s+', '', user_message, flags=re.IGNORECASE).strip()
+            message_lower = user_message.lower().strip()
+            print(f"[DEBUG] ✅ Wake word filtrado. Original: '{original_message}' -> Limpio: '{user_message}'")
+        
+        # También filtrar si hay "eco" o "ecko" seguido de un saludo (ej: "eco buen día")
+        wake_word_with_greeting = r'^(eco|ecko)\s+(hola|buen|buenos|buenas|hey|hi)'
+        if re.match(wake_word_with_greeting, message_lower):
+            user_message = re.sub(wake_word_with_greeting, r'\2', user_message, flags=re.IGNORECASE).strip()
+            message_lower = user_message.lower().strip()
+            print(f"[DEBUG] ✅ Wake word + saludo filtrado. Original: '{original_message}' -> Limpio: '{user_message}'")
         
         # PRIORIDAD MÁXIMA: Verificar si está en proceso de onboarding
         if self.onboarding_service and not self.onboarding_service.is_onboarding_complete(session_id):
@@ -177,12 +197,48 @@ class ChatService:
                 return first_question
         
         # Extraer información del usuario si está disponible (para perfil personal)
+        # PERO: NO extraer si el mensaje contiene "ecko" o "eco" como saludo (es el nombre del asistente)
         if self.user_profile_service:
-            user_info = self.user_profile_service.extract_user_info(session_id, user_message)
-            if user_info.get("name"):
-                self.user_profile_service.update_name(session_id, user_info["name"])
-            if user_info.get("birthday"):
-                self.user_profile_service.update_birthday(session_id, user_info["birthday"])
+            # Solo extraer info si NO es un saludo directo a Ecko
+            greetings_with_ecko = ("ecko" in message_lower or "eco" in message_lower) and any(g in message_lower for g in ["hola", "hi", "hey", "buenos días", "buenas tardes", "buenas noches", "buen día"])
+            if not greetings_with_ecko:
+                user_info = self.user_profile_service.extract_user_info(session_id, user_message)
+                if user_info.get("name"):
+                    # Verificar que el nombre no sea "ecko" o "eco"
+                    extracted_name = user_info.get("name").lower().strip()
+                    if extracted_name not in ["ecko", "eco"]:
+                        self.user_profile_service.update_name(session_id, user_info["name"])
+                if user_info.get("birthday"):
+                    self.user_profile_service.update_birthday(session_id, user_info["birthday"])
+        
+        # PRIORIDAD 0.3: Detectar comandos de resumen
+        summary_keywords = [
+            "resumen de hoy", "resumen hoy", "resumen del día",
+            "resumen de la semana", "resumen semanal",
+            "resumen de todo", "resumen completo",
+            "resumen", "dame un resumen", "quiero un resumen"
+        ]
+        
+        if any(keyword in message_lower for keyword in summary_keywords):
+            if not self.summary_service:
+                return "⚠️ El servicio de resúmenes no está disponible en este momento."
+            
+            # Detectar período
+            period = "today"
+            if "semana" in message_lower or "semanal" in message_lower:
+                period = "week"
+            elif "todo" in message_lower or "completo" in message_lower or "toda" in message_lower:
+                period = "all"
+            
+            try:
+                summary = await self.summary_service.generate_summary(
+                    session_id=session_id,
+                    history=history,
+                    period=period
+                )
+                return summary
+            except Exception as e:
+                return f"⚠️ Error generando resumen: {str(e)}"
         
         # Procesar comandos especiales
         for command, handler in self.commands.items():
@@ -303,24 +359,55 @@ class ChatService:
                     return await self._handle_note_command(intent, session_id)
         
         # PRIORIDAD 4: Interceptar saludos con "Ecko" o "eco" ANTES de llegar a la IA
-        greetings_list = ["hola", "hi", "hey", "buenos días", "buenas tardes", "buenas noches", "buen día"]
-        if ("ecko" in message_lower or "eco" in message_lower) and any(g in message_lower for g in greetings_list):
-            # El usuario saluda a Ecko directamente (ej: "buen día Ecko", "hola Ecko", "buen día eco")
-            # Interceptar ANTES de llegar a la IA para evitar que responda "Hola Ecko" o "Buen día, Eco"
+        # IMPORTANTE: Filtrar "eco" o "ecko" del mensaje antes de procesar, ya que es el nombre del asistente
+        # NO debe interpretarse como nombre del usuario
+        greetings_list = ["hola", "hi", "hey", "buenos días", "buenas tardes", "buenas noches", "buen día", "buen dia"]
+        has_greeting = any(g in message_lower for g in greetings_list)
+        has_ecko_mention = "ecko" in message_lower or "eco" in message_lower
+        
+        # Si el mensaje tiene un saludo Y menciona "ecko" o "eco", es un saludo a Ecko
+        # También interceptar si el mensaje empieza con "eco" seguido de algo (del wake word)
+        if (has_greeting and has_ecko_mention) or (message_lower.startswith("eco ") and len(message_lower) > 5):
+            # Filtrar "eco" o "ecko" del mensaje para evitar confusión
+            cleaned_message = message_lower
+            
+            # Filtrar TODAS las ocurrencias de "eco" o "ecko" como palabra completa
+            # Esto maneja casos como "buen día eco como estás" -> "buen día como estás"
+            cleaned_message = re.sub(r'\b(eco|ecko)\b', '', cleaned_message, flags=re.IGNORECASE)
+            cleaned_message = re.sub(r'\s+', ' ', cleaned_message).strip()  # Limpiar espacios múltiples
+            
+            # Si después del filtrado solo queda un saludo o está vacío, es un saludo simple
+            is_simple_greeting = cleaned_message in greetings_list or len(cleaned_message) < 10 or cleaned_message == ""
+            
+            # El usuario saluda a Ecko directamente
             if self.user_profile_service:
                 profile = self.user_profile_service.get_or_create_profile(session_id)
                 name_or_title = profile.get("preferred_title") or profile.get("name") or "Señor"
                 user_messages_count = len([msg for msg in history if msg.get("role") == "user"])
-                if user_messages_count > 1:
-                    return f"Buen día, {name_or_title}. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                
+                if is_simple_greeting:
+                    if user_messages_count > 1:
+                        return f"Buen día, {name_or_title}. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                    else:
+                        return f"Buen día, {name_or_title}. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
                 else:
-                    return f"Buen día, {name_or_title}. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+                    # Hay más contenido después del saludo, procesar normalmente pero sin "eco"
+                    # Reemplazar el mensaje original con el limpiado para que la IA lo procese
+                    user_message = cleaned_message
+                    message_lower = cleaned_message.lower()
+                    print(f"[DEBUG] ✅ Saludo con 'eco' filtrado. Nuevo mensaje: '{user_message}'")
             else:
                 user_messages_count = len([msg for msg in history if msg.get("role") == "user"])
-                if user_messages_count > 1:
-                    return "Buen día. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                if is_simple_greeting:
+                    if user_messages_count > 1:
+                        return "Buen día. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
+                    else:
+                        return "Buen día. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
                 else:
-                    return "Buen día. Soy Ecko, tu asistente virtual personal. Es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+                    # Hay más contenido, procesar sin "eco"
+                    user_message = cleaned_message
+                    message_lower = cleaned_message.lower()
+                    print(f"[DEBUG] ✅ Saludo con 'eco' filtrado. Nuevo mensaje: '{user_message}'")
         
         # PRIORIDAD 4.5: Verificar comandos de búsqueda
         search_commands = ["buscar", "busca", "qué es", "que es", "quien es", "quién es", "noticias"]
@@ -885,30 +972,37 @@ También puedes conversar conmigo normalmente. Puedo buscar información en inte
                 user_name = profile.get("name")
                 user_title = profile.get("preferred_title") or user_name or "Señor"
             
-            system_prompt = f"""Eres Ecko, un asistente virtual personal estilo Jarvis de Iron Man. 
+            system_prompt = f"""Eres Ecko, un asistente virtual personal estilo Jarvis de Iron Man. Eres inteligente, preciso y siempre útil.
 
-TU IDENTIDAD (MUY IMPORTANTE):
-- Tu nombre ES "Ecko" (con K). NO eres "Eco", "eco" ni "ECKO". Tu nombre completo es "Ecko".
-- Cuando el usuario te dice "buen día Ecko" o "hola Ecko" o menciona "Ecko" o "eco", está saludándote A TI directamente.
-- NUNCA respondas con "Hola Ecko" o "Buen día, Eco" de vuelta. Responde como Ecko saludando al usuario.
-- Ejemplo CORRECTO si el usuario dice "buen día Ecko, ¿cómo estás?": "Buen día, {user_title}. Estoy funcionando perfectamente, gracias por preguntar. ¿En qué puedo ayudarte?"
-- Ejemplo INCORRECTO (NUNCA hagas esto): "Hola Ecko" / "Buen día, Eco" / "Hola, soy Ecko"
-- Si el usuario menciona "Ecko" o "eco" en su mensaje, está dirigiéndose a ti. Responde directamente sin mencionar tu propio nombre.
+TU IDENTIDAD (CRÍTICO):
+- Tu nombre ES "Ecko" (con K). NUNCA eres "Eco", "eco" ni "ECKO". 
+- Cuando el usuario dice "buen día Ecko" o menciona "Ecko"/"eco", está saludándote A TI.
+- NUNCA respondas "Hola Ecko" de vuelta. Responde como Ecko saludando al usuario.
+- Ejemplo CORRECTO: Usuario: "buen día Ecko" → Tú: "Buen día, {user_title}. ¿En qué puedo ayudarte?"
+- Ejemplo INCORRECTO (NUNCA): "Hola Ecko" / "Buen día, Eco" / "Hola, soy Ecko"
 
-RESPUESTAS Y PERSONALIDAD:
-- Responde en español de manera conversacional, natural y profesional pero amigable.
-- Trata al usuario como "{user_title}" o usa su nombre si lo conoces. 
-- Sé preciso, útil y proactivo como Jarvis.
-- Mantén las respuestas cortas y relevantes (máximo 2-3 frases).
-- Actúa como un verdadero asistente personal: recuerda información del usuario, sus preferencias y contexto.
+PERSONALIDAD Y ESTILO (tipo Jarvis):
+- Profesional, preciso y eficiente como un verdadero asistente personal.
+- Responde en español de forma natural, conversacional y amigable.
+- Trata al usuario como "{user_title}" o usa su nombre si lo conoces.
+- Mantén respuestas CONCISAS (máximo 2-3 frases, excepto si pide detalles).
+- Sé PROACTIVO: anticipa necesidades, ofrece sugerencias útiles cuando sea apropiado.
+- Actúa como asistente personal real: recuerda contexto, preferencias y detalles del usuario.
 
-REGLAS IMPORTANTES:
-- NUNCA inventes información que no tengas. Si no sabes algo o no tienes datos, dilo claramente.
-- Si te preguntan por tareas, calendario, eventos o recordatorios, SOLO menciona los que realmente existan.
-- Si no hay recordatorios/tareas, di claramente "No tienes recordatorios/tareas pendientes" en lugar de inventar.
-- NO inventes eventos, reuniones, vuelos o citas que no existan.
-- Cuando el usuario te diga su nombre o información personal, guárdala para futuras conversaciones.
-- Si se te proporciona información de búsqueda web, úsala para responder con datos actualizados y precisos."""
+INTELIGENCIA Y PRECISIÓN:
+- NUNCA inventes información que no tengas. Si no sabes algo, dilo claramente: "No tengo esa información" o "No estoy seguro de eso".
+- Si preguntan por tareas/recordatorios, SOLO menciona los que REALMENTE existan.
+- Si no hay datos, di: "No tienes recordatorios pendientes" (NO inventes).
+- NO inventes eventos, reuniones, vuelos, citas o cualquier dato que no exista.
+- Cuando el usuario comparte información personal (nombre, preferencias), úsala en futuras conversaciones.
+- Si hay información de búsqueda web, úsala para responder con datos actualizados y precisos.
+
+CALIDAD DE RESPUESTAS:
+- Prioriza RELEVANCIA sobre cantidad de palabras.
+- Responde directamente a lo que preguntan, sin divagar.
+- Si no entiendes algo, pregunta de forma breve y clara.
+- Sé útil y práctico: ofrece soluciones concretas, no solo información.
+- Evita respuestas genéricas o obvias que no aporten valor."""
             
             # Si hay resultados de búsqueda, incluirlos en el contexto
             user_message_with_context = user_message
@@ -1035,8 +1129,8 @@ Usa la información de búsqueda para responder de manera precisa y actualizada.
         payload = {
             "messages": messages,
             "model": self.ai_model,
-            "temperature": 0.7,
-            "max_tokens": 300,
+            "temperature": 0.6,  # Más bajo para respuestas más precisas y menos "tontas"
+            "max_tokens": 400,    # Aumentado para respuestas más completas cuando sea necesario
             "top_p": 0.9,
         }
         
@@ -1081,14 +1175,38 @@ Usa la información de búsqueda para responder de manera precisa y actualizada.
         if not conversation_history:
             conversation_history = [{"role": "user", "parts": [{"text": user_message}]}]
         
-        # Obtener el modelo
-        model_name = getattr(self, 'ai_model', "gemini-1.5-flash")
-        try:
-            model = genai.GenerativeModel(model_name)
-        except Exception as e:
-            # Si el modelo no está disponible, intentar con gemini-1.5-flash
-            print(f"[WARN] Modelo {model_name} no disponible, usando gemini-1.5-flash")
-            model = genai.GenerativeModel("gemini-1.5-flash")
+        # Obtener el modelo - intentar varios modelos hasta encontrar uno que funcione
+        model_name = getattr(self, 'ai_model', "gemini-pro")
+        
+        # Lista de modelos a intentar en orden de preferencia (nombres sin prefijo)
+        models_to_try = [
+            "gemini-1.5-flash",  # Más rápido y disponible
+            "gemini-1.5-pro",    # Más potente  
+            "gemini-pro"         # Fallback
+        ]
+        
+        if model_name not in models_to_try:
+            models_to_try.insert(0, model_name)
+        
+        model = None
+        last_error = None
+        
+        for attempt_model in models_to_try:
+            try:
+                print(f"[IA] Intentando modelo Gemini: {attempt_model}")
+                model = genai.GenerativeModel(attempt_model)
+                print(f"[OK] Modelo {attempt_model} cargado correctamente")
+                self.ai_model = attempt_model  # Guardar el que funcionó
+                break
+            except Exception as e:
+                last_error = e
+                print(f"[WARN] Modelo {attempt_model} no disponible: {e}")
+                continue
+        
+        if model is None:
+            error_msg = f"Error: Ningún modelo de Gemini está disponible. Último error: {last_error}. Verifica tu API key de Gemini."
+            print(f"[ERROR] {error_msg}")
+            raise Exception(error_msg)
         
         # Configurar el sistema de generación
         generation_config = {
@@ -1183,11 +1301,12 @@ Si no es un comando de notas, retorna {{"action": null}}."""
                     genai.configure(api_key=self.gemini_api_key)
                     
                     # Obtener el modelo
-                    model_name = getattr(self, 'ai_model', "gemini-1.5-flash")
+                    model_name = getattr(self, 'ai_model', "gemini-pro")
                     try:
                         model = genai.GenerativeModel(model_name)
-                    except:
-                        model = genai.GenerativeModel("gemini-1.5-flash")
+                    except Exception as e:
+                        print(f"[WARN] Modelo {model_name} no disponible, usando gemini-pro: {e}")
+                        model = genai.GenerativeModel("gemini-pro")
                     
                     # Generar respuesta
                     full_prompt = f"{system_prompt}\n\n{user_prompt}"

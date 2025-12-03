@@ -38,15 +38,6 @@ build/
 .coverage
 htmlcov/
 
-# Terraform (futuro)
-.terraform/
-*.tfstate
-*.tfstate.*
-.terraform.lock.hcl
-
-# Docker
-.dockerignore
-
 # Database files
 *.db
 *.sqlite

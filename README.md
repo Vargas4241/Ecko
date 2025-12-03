@@ -1,24 +1,22 @@
 # 🤖 Ecko - Asistente Virtual Personal
 
-Asistente virtual tipo "Jarvis" desarrollado con Python (FastAPI), diseñado para funcionar 24/7 en AWS. Este proyecto es una plataforma de aprendizaje para Docker, AWS ECS Fargate, Terraform y CI/CD.
+Asistente virtual tipo "Jarvis" desarrollado con Python (FastAPI) y JavaScript vanilla.
 
 ## 📋 Características
 
-- **Chat conversacional inteligente**: Con soporte para IA real usando Groq API (gratuita)
-- **🔍 Búsqueda web inteligente**: Busca información en internet en tiempo real (nuevo!)
+- **Chat conversacional inteligente**: Con soporte para IA usando OpenAI GPT-4o-mini
 - **Comandos básicos**: 
   - `hora` - Mostrar hora actual
   - `fecha` - Mostrar fecha actual
   - `recordar [texto]` - Guardar notas
-  - `buscar [tema]` - Buscar información en la web
-  - `qué es [concepto]` - Buscar definición o información
-  - `noticias [tema]` - Buscar noticias recientes
+  - `resumen de hoy` - Generar resumen de la conversación del día
   - `ayuda` - Mostrar comandos disponibles
 - **Sesiones persistentes**: Mantiene el contexto de conversación
 - **Interfaz móvil**: Funciona perfectamente desde tu celular
-- **IA opcional**: Puede usar respuestas básicas o IA real (configurable)
+- **Reconocimiento de voz**: Actívale con "Hey Ecko" o "Eco"
+- **Síntesis de voz**: Ecko te responde hablando
 
-## 🚀 Inicio Rápido (Desarrollo Local)
+## 🚀 Inicio Rápido
 
 ### Prerrequisitos
 
@@ -27,7 +25,7 @@ Asistente virtual tipo "Jarvis" desarrollado con Python (FastAPI), diseñado par
 
 ### Instalación
 
-1. **Clonar o navegar al proyecto**:
+1. **Navegar al proyecto**:
 ```bash
 cd Ecko
 ```
@@ -76,16 +74,18 @@ Ecko/
 │   │   ├── routes/          # Routers de la API
 │   │   ├── services/        # Lógica de negocio
 │   │   ├── models/          # Modelos de datos
+│   │   ├── data/            # Base de datos SQLite
 │   │   └── requirements.txt
 │   └── frontend/            # Interfaz web
 │       ├── index.html
 │       ├── styles.css
+│       ├── styles-jarvis.css
 │       └── app.js
-├── README.md
-└── .gitignore
+├── start.py                 # Script de inicio rápido
+└── README.md
 ```
 
-## 🔌 API Endpoints
+## 🔌 API Endpoints Principales
 
 ### POST `/api/chat`
 Enviar un mensaje al asistente
@@ -113,108 +113,38 @@ Crear una nueva sesión de conversación
 ### GET `/api/history/{session_id}`
 Obtener historial de una sesión
 
-### DELETE `/api/history/{session_id}`
-Limpiar historial de una sesión
+### POST `/api/summaries/{session_id}`
+Generar resumen de la conversación
+
+## 🤖 Configuración de IA (Opcional pero Recomendado)
+
+Para que Ecko tenga conversaciones más inteligentes usando OpenAI:
+
+1. Obtén una API key en [OpenAI Platform](https://platform.openai.com/api-keys)
+2. Crea un archivo `.env` en `app/backend/`:
+```env
+USE_AI=true
+AI_PROVIDER=openai
+OPENAI_API_KEY=tu_api_key_aqui
+```
+
+3. Reinicia el servidor
+
+Sin configurar IA, Ecko usará respuestas básicas predefinidas.
 
 ## 🛠️ Tecnologías
 
 - **Backend**: Python 3.9+, FastAPI
 - **Frontend**: HTML5, CSS3, JavaScript (vanilla)
-- **Containers**: Docker ✅
-- **Infraestructura**: AWS ECS Fargate ✅
-- **IaC**: Terraform ✅
-- **CI/CD**: GitHub Actions (próximamente)
-
-## 🎯 Objetivos de Aprendizaje
-
-Este proyecto está diseñado para aprender:
-
-1. ✅ Desarrollo de APIs con FastAPI
-2. ✅ Docker y containerización
-3. ✅ Infraestructura en AWS (ECS Fargate)
-4. ✅ Terraform (Infraestructura como Código)
-5. 🔄 CI/CD con GitHub Actions
-
-## 🐳 Docker
-
-Ecko está containerizado y listo para desplegar. Ver [docs/DOCKER.md](docs/DOCKER.md) para más detalles.
-
-### Inicio Rápido con Docker
-
-```bash
-# Construir y ejecutar
-docker-compose up --build
-
-# Acceder en http://localhost:8000
-```
-
-## ☁️ AWS Deployment con Terraform
-
-Ecko está listo para desplegarse en AWS usando Terraform. Ver [docs/TERRAFORM.md](docs/TERRAFORM.md) para la guía completa.
-
-### Inicio Rápido con Terraform
-
-```bash
-cd terraform
-terraform init
-terraform plan
-terraform apply
-```
-
-Después, pushea tu imagen Docker a ECR y despliega.
-
-## 🤖 Configuración de IA (Opcional pero Recomendado)
-
-Para que Ecko tenga conversaciones más inteligentes usando IA real (GRATIS):
-
-1. Obtén una API key gratuita en [Groq Console](https://console.groq.com/)
-2. Crea un archivo `.env` en `app/backend/`:
-```env
-USE_AI=true
-GROQ_API_KEY=tu_api_key_aqui
-```
-3. Instala dependencias: `pip install -r requirements.txt`
-4. Reinicia el servidor
-
-**Ver guía completa en**: [docs/IA_SETUP.md](docs/IA_SETUP.md)
-
-## 🔍 Configuración de Búsqueda Web (Nuevo!)
-
-**✅ ¡La búsqueda web funciona por defecto!** No necesitas configurar nada.
-
-Ecko puede buscar información en internet automáticamente usando DuckDuckGo (gratis, sin API key).
-
-### Opcional: Mejor Calidad con Tavily
-
-Si quieres mejor calidad de búsqueda, puedes configurar Tavily (requiere API key gratuita):
-
-1. Obtén una API key gratuita en [Tavily.com](https://tavily.com)
-2. Crea `app/backend/.env` y añade:
-   ```env
-   ENABLE_SEARCH=true
-   SEARCH_PROVIDER=tavily
-   SEARCH_API_KEY=tu_api_key_tavily
-   ```
-
-**Pero esto es OPCIONAL** - DuckDuckGo ya funciona sin configuración.
-
-**Ver guía completa en**: [docs/BUSQUEDA_WEB.md](docs/BUSQUEDA_WEB.md)
+- **Base de datos**: SQLite
+- **IA**: OpenAI GPT-4o-mini (opcional)
 
 ## 📝 Notas
 
-- El asistente puede usar respuestas básicas o IA real (configurable)
-- El sistema de memoria es en memoria (no persistente por ahora)
-- Se migrará a base de datos para persistencia en futuras versiones
-
-## 🤝 Contribuir
-
-Este es un proyecto personal de aprendizaje, pero las sugerencias son bienvenidas.
-
-## 📄 Licencia
-
-Proyecto personal - Uso educativo
+- La aplicación guarda el historial de conversaciones en SQLite
+- Los datos se persisten en `app/backend/data/ecko.db`
+- Funciona completamente offline (sin IA) o con IA para respuestas más inteligentes
 
 ---
 
-**Versión**: 0.1.0 (Fase 1 - Asistente Básico Local)
-
+**Versión**: 1.0.0

@@ -24,7 +24,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")  # Para GPT-4
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")  # Para Claude
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # Para Google Gemini (recomendado)
-AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").lower()  # "groq", "openai", "anthropic", "gemini"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").lower()  # "groq", "openai", "anthropic", "gemini" (openai recomendado)
 
 # Configuración de Búsqueda Web
 SEARCH_API_KEY = os.getenv("SEARCH_API_KEY", "")  # API key de Tavily (opcional)

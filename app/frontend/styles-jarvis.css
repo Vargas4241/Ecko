@@ -444,33 +444,160 @@ footer {
     display: none;
 }
 
-/* Responsive */
+/* Responsive - Móvil */
 @media (max-width: 768px) {
-    .data-display {
-        width: 95%;
-        padding: 20px;
+    /* Header más compacto en móvil */
+    header {
+        top: 10px;
     }
     
-    .voice-button {
-        width: 60px;
-        height: 60px;
+    header h1 {
+        font-size: 1.2rem;
+        letter-spacing: 4px;
+    }
+    
+    header .logo {
+        width: 24px;
+        height: 24px;
+        margin-bottom: 5px;
+    }
+    
+    .theme-toggle {
+        top: 10px;
+        right: 10px;
+        width: 28px;
+        height: 28px;
+    }
+    
+    /* Display central más compacto */
+    .data-display {
+        width: 95%;
+        max-width: 400px;
+        padding: 20px 15px;
+        min-height: 120px;
+        margin-bottom: 30px;
+    }
+    
+    .data-display .data-item {
+        font-size: 1rem;
+    }
+    
+    .data-display .data-label {
+        font-size: 0.75rem;
+    }
+    
+    .data-display .data-value {
+        font-size: 1.2rem;
+    }
+    
+    /* Status indicator más arriba en móvil */
+    .status-indicator {
+        bottom: 100px;
+        font-size: 0.8rem;
+    }
+    
+    .status-line {
+        font-size: 0.75rem;
+        letter-spacing: 2px;
+    }
+    
+    /* Input container más compacto */
+    .chat-input-container {
+        padding: 15px 10px;
+        padding-bottom: calc(15px + env(safe-area-inset-bottom));
     }
     
     .chat-form {
-        flex-wrap: wrap;
+        gap: 8px;
+        max-width: 100%;
     }
     
     .message-input {
-        max-width: 100%;
-        order: 1;
+        max-width: calc(100% - 140px);
+        padding: 10px 15px;
+        font-size: 0.9rem;
+        flex: 1;
+        min-width: 0;
     }
     
     .send-button {
+        width: 45px;
+        height: 45px;
+        min-width: 45px;
+        font-size: 1rem;
         order: 2;
     }
     
+    /* Botón de voz más pequeño pero visible */
     .voice-button {
+        width: 55px;
+        height: 55px;
+        min-width: 55px;
         order: 3;
+    }
+    
+    .voice-icon {
+        width: 24px;
+        height: 24px;
+    }
+    
+    /* Notificaciones más pequeñas en móvil */
+    .notifications-container {
+        top: 60px;
+        right: 10px;
+        left: 10px;
+        max-width: calc(100% - 20px);
+    }
+    
+    .notification {
+        padding: 12px 15px;
+        font-size: 0.85rem;
+    }
+    
+    /* Asegurar que no haya overflow */
+    body {
+        overflow-x: hidden;
+    }
+    
+    .container {
+        overflow-x: hidden;
+    }
+}
+
+/* Móvil muy pequeño */
+@media (max-width: 480px) {
+    .data-display {
+        width: 98%;
+        padding: 15px 10px;
+        min-height: 100px;
+    }
+    
+    .data-display .data-value {
+        font-size: 1rem;
+    }
+    
+    .status-indicator {
+        bottom: 90px;
+    }
+    
+    .chat-input-container {
+        padding: 12px 8px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+    
+    .message-input {
+        font-size: 0.85rem;
+        padding: 8px 12px;
+    }
+    
+    .send-button {
+        width: 40px;
+        height: 40px;
+    }
+    
+    .voice-button {
+        width: 50px;
+        height: 50px;
     }
 }
 

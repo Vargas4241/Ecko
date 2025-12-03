@@ -53,6 +53,13 @@ except ImportError:
     PUSH_SERVICE_AVAILABLE = False
     print("[WARN] PushService no disponible")
 
+try:
+    from services.summary_service import SummaryService
+    SUMMARY_SERVICE_AVAILABLE = True
+except ImportError:
+    SUMMARY_SERVICE_AVAILABLE = False
+    print("[WARN] SummaryService no disponible")
+
 # Crear aplicación FastAPI
 app = FastAPI(
     title="Ecko - Asistente Virtual",
@@ -66,11 +73,12 @@ user_profile_service = None
 push_service = None
 notes_service = None
 onboarding_service = None
+summary_service = None
 
 @app.on_event("startup")
 async def startup_event():
     """Inicializar servicios al iniciar la aplicación"""
-    global reminder_service, user_profile_service, push_service, notes_service, onboarding_service
+    global reminder_service, user_profile_service, push_service, notes_service, onboarding_service, summary_service
     
     # Inicializar servicio de push notifications
     if PUSH_SERVICE_AVAILABLE:
@@ -104,6 +112,18 @@ async def startup_event():
             print(f"[WARN] Error inicializando NotesService: {e}")
             notes_service = None
     
+    # Inicializar servicio de resúmenes
+    if SUMMARY_SERVICE_AVAILABLE:
+        try:
+            from services.memory_service import MemoryService
+            memory_service = MemoryService()
+            summary_service = SummaryService(memory_service=memory_service)
+            chat_router.summary_service = summary_service
+            print("[OK] SummaryService inicializado")
+        except Exception as e:
+            print(f"[WARN] Error inicializando SummaryService: {e}")
+            summary_service = None
+    
     # Inicializar servicio de recordatorios
     if REMINDER_SERVICE_AVAILABLE:
         try:
@@ -116,7 +136,8 @@ async def startup_event():
                 reminder_service=reminder_service,
                 user_profile_service=user_profile_service,
                 notes_service=notes_service,
-                onboarding_service=onboarding_service
+                onboarding_service=onboarding_service,
+                summary_service=summary_service
             )
             print("[OK] Servicios inicializados correctamente")
         except Exception as e:
@@ -128,14 +149,16 @@ async def startup_event():
             chat_router.chat_service = ChatService(
                 user_profile_service=user_profile_service,
                 notes_service=notes_service,
-                onboarding_service=onboarding_service
+                onboarding_service=onboarding_service,
+                summary_service=summary_service
             )
     else:
         # Inicializar solo ChatService con perfil de usuario y notas
         from services.chat_service import ChatService
         chat_router.chat_service = ChatService(
             user_profile_service=user_profile_service,
-            notes_service=notes_service
+            notes_service=notes_service,
+            summary_service=summary_service
         )
 
 @app.on_event("shutdown")
