@@ -1,0 +1,63 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables (se pasarán en runtime o ECS)
+.env
+.env.local
+.env.*.local
+app/backend/.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database files (se crearán en el contenedor)
+*.db
+*.sqlite
+*.sqlite3
+
+# Chat logs (se generarán en el contenedor)
+app/backend/data/chats/*.txt
+
+# Docker files (no necesitamos copiarlos)
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentación
+README.md
+*.md
+
+# CI/CD
+.github/
